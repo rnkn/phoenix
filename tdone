@@ -3,8 +3,8 @@ use strict;
 use warnings;
 use utf8;
 use POSIX         qw(strftime mktime);
-use File::Path    qw(make_path);
 use File::Temp    qw(tempfile);
+use Path::Tiny;
 use List::Util    qw(max);
 use Getopt::Long  qw(GetOptionsFromArray);
 use YAML::Tiny;
@@ -21,18 +21,15 @@ my @FIELDS = qw(id status project title scheduled due priority blocked_by tags d
 sub data_file {
     return $ENV{TDONE_FILE} if defined $ENV{TDONE_FILE} && $ENV{TDONE_FILE} ne '';
     my $dir = "$ENV{HOME}/.tdone";
-    make_path($dir) unless -d $dir;
+    path($dir)->mkpath unless -d $dir;
     return "$dir/tasks.tsv";
 }
 
 sub load_tasks {
     my $file = data_file();
     return () unless -f $file;
-    open my $fh, '<:encoding(UTF-8)', $file
-        or die "Cannot read $file: $!\n";
     my @tasks;
-    while (<$fh>) {
-        chomp;
+    for (path($file)->lines_utf8({chomp => 1})) {
         next if /^\s*$/;
         my @vals = split /\t/, $_, scalar @FIELDS;
         push @vals, '' while @vals < scalar @FIELDS;
@@ -41,15 +38,13 @@ sub load_tasks {
         $t{description} =~ s/\\n/\n/g;
         push @tasks, \%t;
     }
-    close $fh;
     return @tasks;
 }
 
 sub save_tasks {
     my @tasks = @_;
     my $file = data_file();
-    open my $fh, '>:encoding(UTF-8)', $file
-        or die "Cannot write $file: $!\n";
+    my @lines;
     for my $t (@tasks) {
         my @vals = map {
             my $v = $t->{$_} // '';
@@ -57,9 +52,9 @@ sub save_tasks {
             $v =~ s/\r?\n/\\n/g if $_ eq 'description';
             $v
         } @FIELDS;
-        print $fh join("\t", @vals), "\n";
+        push @lines, join("\t", @vals) . "\n";
     }
-    close $fh;
+    path($file)->spew_utf8(@lines);
 }
 
 sub next_id {
