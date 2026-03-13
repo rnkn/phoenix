@@ -232,7 +232,7 @@ sub print_table {
     my @tasks = @_;
     my $cols = 80;
     eval { ($cols) = GetTerminalSize() };
-    my $title_w = max(10, $cols - 82);
+    my $title_w = max(10, $cols - 85);
     printf "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n",
         'ID', 'STATUS', 'PROJECT', $title_w, 'TITLE',
         'SCHEDULED', 'DUE', 'PRI', 'TAGS';
@@ -246,7 +246,7 @@ sub print_table {
             $title_w, substr($t->{title} // '', 0, $title_w),
             fmt_date($t->{scheduled}),
             fmt_date($t->{due}),
-            $t->{priority} // '',
+            substr($t->{priority} // '', 0, 4),
             substr($t->{tags} // '', 0, 20),
             $desc_star;
     }
@@ -524,7 +524,7 @@ sub tui_prompt {
 sub tui_draw {
     my ($rows, $cols, $disp, $row_map, $cur, $scroll, $search, $narrow) = @_;
     print CLEAR;
-    my $title_w = max(10, $cols - 82);
+    my $title_w = max(10, $cols - 85);
     printf BOLD . "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n" . RESET,
         'ID', 'STATUS', 'PROJECT', $title_w, 'TITLE',
         'SCHEDULED', 'DUE', 'PRI', 'TAGS';
@@ -553,13 +553,16 @@ sub tui_draw {
             # Highlight search match in title
             if ($search ne '' && $title =~ /\Q$search\E/i) {
                 (my $ht = $title) =~ s/(\Q$search\E)/YELLOW.BOLD.$1.RESET.($is_cur ? REVERSE : '')/ige;
-                printf "%s%-4s %-9s %-12s %-*s %-14.14s %-14.14s %-4s %-20s%s%s\n",
+                # Pad using the visible length of $title (before ANSI codes were added)
+                # so that subsequent columns are correctly aligned despite the invisible codes.
+                my $ht_padded = $ht . (' ' x max(0, $title_w - length($title)));
+                printf "%s%-4s %-9s %-12s %s %-14.14s %-14.14s %-4s %-20s%s%s\n",
                     $pfx,
                     $t->{id} // '', substr($status, 0, 9),
                     substr($t->{project} // '', 0, 12),
-                    $title_w, $ht,
+                    $ht_padded,
                     fmt_date($t->{scheduled}), fmt_date($t->{due}),
-                    $t->{priority} // '',
+                    substr($t->{priority} // '', 0, 4),
                     substr($t->{tags} // '', 0, 20),
                     $star, $sfx;
             } else {
@@ -569,7 +572,7 @@ sub tui_draw {
                     substr($t->{project} // '', 0, 12),
                     $title_w, $title,
                     fmt_date($t->{scheduled}), fmt_date($t->{due}),
-                    $t->{priority} // '',
+                    substr($t->{priority} // '', 0, 4),
                     substr($t->{tags} // '', 0, 20),
                     $star, $sfx;
             }
