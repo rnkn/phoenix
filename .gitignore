@@ -1,0 +1,6 @@
+local/
+*.tsv
+*.bak
+*.swp
+*~
+.DS_Store
