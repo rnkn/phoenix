@@ -904,5 +904,5 @@ sub dispatch_command {
 if (@ARGV) {
     dispatch_command(@ARGV);
 } else {
-    cmd_ui();
+    cmd_list();
 }
