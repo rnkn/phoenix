@@ -87,12 +87,19 @@ my %MONTH_MAP = (
     jul => 6, aug => 7, sep => 8, oct => 9, nov => 10, dec => 11,
 );
 
+# A valid 5-field crontab expression, e.g. "0 0 * * *" or "*/15 6-22 1,15 * 1-5"
+sub is_cron_expr {
+    my ($s) = @_;
+    return 0 unless defined $s && $s ne '';
+    return $s =~ /^[\d\*\/,\-]+(?:\s+[\d\*\/,\-]+){4}$/;
+}
+
 sub parse_timespec {
     my ($spec) = @_;
     return '' unless defined $spec && $spec ne '';
 
-    # Cron expression (5 space-separated tokens stored verbatim)
-    return $spec if $spec =~ /\s/;
+    # Valid 5-field cron expression — store verbatim
+    return $spec if is_cron_expr($spec);
 
     # Already YYYY-MM-DD
     return $spec if $spec =~ /^\d{4}-\d{2}-\d{2}$/;
@@ -149,7 +156,10 @@ sub parse_timespec {
         return strftime('%Y-%m-%d', @new);
     }
 
-    return $spec;    # fallback: return as-is (e.g. stored cron string)
+    # Fallback: only accept a cron expression; anything else is invalid
+    return $spec if is_cron_expr($spec);
+    warn "tdone: unrecognised timespec '$spec' ignored\n";
+    return '';
 }
 
 # Pre-process argv so that "-t 0 0 * * *" folds the 5 cron tokens into one value.
@@ -215,21 +225,21 @@ sub display_status {
 sub fmt_date {
     my ($d) = @_;
     return '' unless defined $d && $d ne '';
-    return substr($d, 0, 10);
+    return $d;    # YYYY-MM-DD or cron expression — return as-is
 }
 
 sub print_table {
     my @tasks = @_;
     my $cols = 80;
     eval { ($cols) = GetTerminalSize() };
-    my $title_w = max(10, $cols - 72);
-    printf "%-4s %-9s %-12s %-*s %-10s %-10s %-4s %s\n",
+    my $title_w = max(10, $cols - 82);
+    printf "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n",
         'ID', 'STATUS', 'PROJECT', $title_w, 'TITLE',
         'SCHEDULED', 'DUE', 'PRI', 'TAGS';
     print '-' x $cols, "\n";
     for my $t (@tasks) {
         my $desc_star = ($t->{description} // '') ne '' ? '*' : ' ';
-        printf "%-4s %-9s %-12s %-*s %-10s %-10s %-4s %-20s%s\n",
+        printf "%-4s %-9s %-12s %-*s %-14.14s %-14.14s %-4s %-20s%s\n",
             $t->{id} // '',
             substr(display_status($t), 0, 9),
             substr($t->{project} // '', 0, 12),
@@ -514,8 +524,8 @@ sub tui_prompt {
 sub tui_draw {
     my ($rows, $cols, $disp, $row_map, $cur, $scroll, $search, $narrow) = @_;
     print CLEAR;
-    my $title_w = max(10, $cols - 72);
-    printf BOLD . "%-4s %-9s %-12s %-*s %-10s %-10s %-4s %s\n" . RESET,
+    my $title_w = max(10, $cols - 82);
+    printf BOLD . "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n" . RESET,
         'ID', 'STATUS', 'PROJECT', $title_w, 'TITLE',
         'SCHEDULED', 'DUE', 'PRI', 'TAGS';
     print '-' x $cols, "\n";
@@ -543,7 +553,7 @@ sub tui_draw {
             # Highlight search match in title
             if ($search ne '' && $title =~ /\Q$search\E/i) {
                 (my $ht = $title) =~ s/(\Q$search\E)/YELLOW.BOLD.$1.RESET.($is_cur ? REVERSE : '')/ige;
-                printf "%s%-4s %-9s %-12s %-*s %-10s %-10s %-4s %-20s%s%s\n",
+                printf "%s%-4s %-9s %-12s %-*s %-14.14s %-14.14s %-4s %-20s%s%s\n",
                     $pfx,
                     $t->{id} // '', substr($status, 0, 9),
                     substr($t->{project} // '', 0, 12),
@@ -553,7 +563,7 @@ sub tui_draw {
                     substr($t->{tags} // '', 0, 20),
                     $star, $sfx;
             } else {
-                printf "%s%-4s %-9s %-12s %-*s %-10s %-10s %-4s %-20s%s%s\n",
+                printf "%s%-4s %-9s %-12s %-*s %-14.14s %-14.14s %-4s %-20s%s%s\n",
                     $pfx,
                     $t->{id} // '', substr($status, 0, 9),
                     substr($t->{project} // '', 0, 12),
@@ -730,7 +740,8 @@ sub cmd_ui {
                     my @all2 = load_tasks();
                     for my $t (@all2) {
                         if (($t->{id} // 0) == $tid) {
-                            $t->{tags} = join(' ', grep { $_ ne '' } $t->{tags} // '', $tags);
+                            $t->{tags} = join(' ', grep { $_ ne '' }
+                                split(/\s+/, $t->{tags} // ''), split(/\s+/, $tags));
                         }
                     }
                     save_tasks(@all2);
@@ -849,7 +860,7 @@ my %CMD = (
     due      => \&cmd_due,
     block    => \&cmd_block,
     list     => \&cmd_list,
-    ls       => \&cmd_list,
+    ls       => \&cmd_list,     # alias — excluded from prefix matching
     kill     => \&cmd_kill,
     complete => \&cmd_complete,
     waiting  => \&cmd_waiting,
@@ -858,19 +869,23 @@ my %CMD = (
     today    => \&cmd_today,
 );
 
+# Commands that are pure aliases; they match exactly but are not used for
+# prefix expansion so that e.g. 'l' unambiguously expands to 'list'.
+my %ALIASES = (ls => 1);
+
 sub dispatch_command {
     my @args = @_;
     return unless @args;
     my $verb = lc shift @args;
 
+    # Exact match first (including aliases like 'ls')
     if (exists $CMD{$verb}) {
         $CMD{$verb}->(@args);
         return;
     }
 
-    # Prefix matching (abbreviations), but skip 'ls' when matching prefixes
-    my @matches = grep { /^\Q$verb\E/i && $_ ne 'ls' } keys %CMD;
-    push @matches, 'ls' if 'ls' =~ /^\Q$verb\E/i && !grep { $_ eq 'ls' } @matches;
+    # Prefix matching against non-alias commands only
+    my @matches = grep { !$ALIASES{$_} && /^\Q$verb\E/i } keys %CMD;
 
     if (@matches == 1) {
         $CMD{$matches[0]}->(@args);
