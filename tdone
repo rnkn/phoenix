@@ -136,8 +136,8 @@ sub parse_timespec {
         return strftime('%Y-%m-%d', localtime($now + $diff*86400));
     }
 
-    # +dayname — next occurrence of that weekday
-    if ($spec =~ /^\+([a-z]+)$/i && exists $DAY_MAP{lc $1}) {
+    # dayname / +dayname — next occurrence of that weekday
+    if ($spec =~ /^\+?([a-z]+)$/i && exists $DAY_MAP{lc $1}) {
         my $target = $DAY_MAP{lc $1};
         my $t = $now + 86400;
         $t += 86400 while (localtime($t))[6] != $target;
@@ -155,28 +155,6 @@ sub parse_timespec {
     return $spec if is_cron_expr($spec);
     warn "tdone: unrecognised timespec '$spec' ignored\n";
     return '';
-}
-
-# Pre-process argv so that "-t 0 0 * * *" folds the 5 cron tokens into one value.
-sub preprocess_timespec_args {
-    my @args = @_;
-    my @out;
-    my $i = 0;
-    while ($i < @args) {
-        if ($args[$i] eq '-t' && $i+1 < @args && $args[$i+1] =~ /^[\d\*]/) {
-            if ($i+5 < @args) {
-                my @five = @args[$i+1 .. $i+5];
-                push @out, '-t', join(' ', @five);
-                $i += 6;
-            } else {
-                push @out, $args[$i], $args[$i+1];
-                $i += 2;
-            }
-        } else {
-            push @out, $args[$i++];
-        }
-    }
-    return @out;
 }
 
 # ============================================================
@@ -312,7 +290,7 @@ sub parse_task_string {
 # ============================================================
 
 sub cmd_add {
-    my @args = preprocess_timespec_args(@_);
+    my @args = @_;
     my ($opt_e, $opt_t);
     GetOptionsFromArray(\@args, 'e' => \$opt_e, 't=s' => \$opt_t);
     my $str = join(' ', @args);
@@ -338,7 +316,7 @@ sub cmd_add {
 }
 
 sub cmd_schedule {
-    my @args = preprocess_timespec_args(@_);
+    my @args = @_;
     my $opt_t;
     GetOptionsFromArray(\@args, 't=s' => \$opt_t);
     my $query = join(' ', @args);
@@ -355,7 +333,7 @@ sub cmd_schedule {
 }
 
 sub cmd_due {
-    my @args = preprocess_timespec_args(@_);
+    my @args = @_;
     my $opt_t;
     GetOptionsFromArray(\@args, 't=s' => \$opt_t);
     my $query = join(' ', @args);
