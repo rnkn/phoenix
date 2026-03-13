@@ -1,0 +1,893 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+use utf8;
+use POSIX         qw(strftime mktime);
+use File::Path    qw(make_path);
+use File::Temp    qw(tempfile);
+use List::Util    qw(max);
+use Getopt::Long  qw(GetOptionsFromArray);
+use YAML::Tiny;
+use Term::ReadKey;
+
+our $VERSION = '0.1.0';
+
+# ============================================================
+# DATA FILE
+# ============================================================
+
+my @FIELDS = qw(id status project title scheduled due priority blocked_by tags description);
+
+sub data_file {
+    return $ENV{TDONE_FILE} if defined $ENV{TDONE_FILE} && $ENV{TDONE_FILE} ne '';
+    my $dir = "$ENV{HOME}/.tdone";
+    make_path($dir) unless -d $dir;
+    return "$dir/tasks.tsv";
+}
+
+sub load_tasks {
+    my $file = data_file();
+    return () unless -f $file;
+    open my $fh, '<:encoding(UTF-8)', $file
+        or die "Cannot read $file: $!\n";
+    my @tasks;
+    while (<$fh>) {
+        chomp;
+        next if /^\s*$/;
+        my @vals = split /\t/, $_, scalar @FIELDS;
+        push @vals, '' while @vals < scalar @FIELDS;
+        my %t;
+        @t{@FIELDS} = @vals;
+        $t{description} =~ s/\\n/\n/g;
+        push @tasks, \%t;
+    }
+    close $fh;
+    return @tasks;
+}
+
+sub save_tasks {
+    my @tasks = @_;
+    my $file = data_file();
+    open my $fh, '>:encoding(UTF-8)', $file
+        or die "Cannot write $file: $!\n";
+    for my $t (@tasks) {
+        my @vals = map {
+            my $v = $t->{$_} // '';
+            $v =~ s/\t/    /g;
+            $v =~ s/\r?\n/\\n/g if $_ eq 'description';
+            $v
+        } @FIELDS;
+        print $fh join("\t", @vals), "\n";
+    }
+    close $fh;
+}
+
+sub next_id {
+    my @tasks = @_;
+    my $max = 0;
+    $max < ($_ // 0) and $max = $_ for map { $_->{id} } @tasks;
+    return $max + 1;
+}
+
+# ============================================================
+# TIME PARSING
+# ============================================================
+
+my %DAY_MAP = (
+    sunday    => 0, monday  => 1, tuesday   => 2, wednesday => 3,
+    thursday  => 4, friday  => 5, saturday  => 6,
+    sun => 0, mon => 1, tue => 2, wed => 3, thu => 4, fri => 5, sat => 6,
+);
+
+my %MONTH_MAP = (
+    january   => 0, february => 1, march    => 2, april    => 3,
+    may       => 4, june     => 5, july     => 6, august   => 7,
+    september => 8, october  => 9, november => 10, december => 11,
+    jan => 0, feb => 1, mar => 2, apr => 3, jun => 5,
+    jul => 6, aug => 7, sep => 8, oct => 9, nov => 10, dec => 11,
+);
+
+sub parse_timespec {
+    my ($spec) = @_;
+    return '' unless defined $spec && $spec ne '';
+
+    # Cron expression (5 space-separated tokens stored verbatim)
+    return $spec if $spec =~ /\s/;
+
+    # Already YYYY-MM-DD
+    return $spec if $spec =~ /^\d{4}-\d{2}-\d{2}$/;
+
+    my $now = time;
+    my @lt  = localtime($now);    # (sec, min, hour, mday, mon, year, wday, yday, isdst)
+
+    return strftime('%Y-%m-%d', @lt)                    if lc($spec) eq 'today';
+    return strftime('%Y-%m-%d', localtime($now+86400))  if lc($spec) eq 'tomorrow';
+
+    # [+-]Nd / [+-]Nw / [+-]Nm / [+-]Ny / [+-]Nh
+    if ($spec =~ /^([+-])(\d+)([dhwmy])$/i) {
+        my ($sign, $n, $unit) = ($1, $2, lc $3);
+        my $mult = $sign eq '+' ? 1 : -1;
+        my @new  = @lt;
+        if    ($unit eq 'd') { return strftime('%Y-%m-%d', localtime($now + $mult*$n*86400));    }
+        elsif ($unit eq 'h') { return strftime('%Y-%m-%d', localtime($now + $mult*$n*3600));     }
+        elsif ($unit eq 'w') { return strftime('%Y-%m-%d', localtime($now + $mult*$n*604800));   }
+        elsif ($unit eq 'm') {
+            $new[4] += $mult * $n;
+            while ($new[4] > 11) { $new[4] -= 12; $new[5]++; }
+            while ($new[4] < 0)  { $new[4] += 12; $new[5]--; }
+            return strftime('%Y-%m-%d', @new);
+        }
+        elsif ($unit eq 'y') { $new[5] += $mult * $n; return strftime('%Y-%m-%d', @new); }
+    }
+
+    # Nd — set day of month to N (this month)
+    if ($spec =~ /^(\d{1,2})d$/i) {
+        my @new = @lt;
+        $new[3] = $1;
+        return strftime('%Y-%m-%d', @new);
+    }
+
+    # Nw — set weekday within current week (0=Sun … 6=Sat)
+    if ($spec =~ /^([0-6])w$/i) {
+        my $diff = $1 - $lt[6];
+        $diff += 7 if $diff < 0;
+        return strftime('%Y-%m-%d', localtime($now + $diff*86400));
+    }
+
+    # +dayname — next occurrence of that weekday
+    if ($spec =~ /^\+([a-z]+)$/i && exists $DAY_MAP{lc $1}) {
+        my $target = $DAY_MAP{lc $1};
+        my $t = $now + 86400;
+        $t += 86400 while (localtime($t))[6] != $target;
+        return strftime('%Y-%m-%d', localtime($t));
+    }
+
+    # month name — today's date in that month
+    if (exists $MONTH_MAP{lc $spec}) {
+        my @new = @lt;
+        $new[4] = $MONTH_MAP{lc $spec};
+        return strftime('%Y-%m-%d', @new);
+    }
+
+    return $spec;    # fallback: return as-is (e.g. stored cron string)
+}
+
+# Pre-process argv so that "-t 0 0 * * *" folds the 5 cron tokens into one value.
+sub preprocess_timespec_args {
+    my @args = @_;
+    my @out;
+    my $i = 0;
+    while ($i < @args) {
+        if ($args[$i] eq '-t' && $i+1 < @args && $args[$i+1] =~ /^[\d\*]/) {
+            if ($i+5 < @args) {
+                my @five = @args[$i+1 .. $i+5];
+                push @out, '-t', join(' ', @five);
+                $i += 6;
+            } else {
+                push @out, $args[$i], $args[$i+1];
+                $i += 2;
+            }
+        } else {
+            push @out, $args[$i++];
+        }
+    }
+    return @out;
+}
+
+# ============================================================
+# TASK MATCHING AND SORTING
+# ============================================================
+
+sub match_tasks {
+    my ($query, @tasks) = @_;
+    return @tasks unless defined $query && $query ne '';
+    if ($query =~ /^\d+$/) {
+        return grep { ($_->{id} // 0) == $query } @tasks;
+    }
+    my $lq = lc $query;
+    return grep {
+        index(lc($_->{title}   // ''), $lq) >= 0 ||
+        index(lc($_->{project} // ''), $lq) >= 0 ||
+        index(lc($_->{tags}    // ''), $lq) >= 0
+    } @tasks;
+}
+
+sub task_sort_key {
+    my ($t) = @_;
+    my $far   = '9999-12-31';
+    my $due   = ($t->{due}       // '') =~ /^\d{4}/ ? $t->{due}       : $far;
+    my $sched = ($t->{scheduled} // '') =~ /^\d{4}/ ? $t->{scheduled} : $far;
+    return "$due\t$sched\t" . sprintf('%010d', $t->{id} // 0);
+}
+
+sub sort_tasks { sort { task_sort_key($a) cmp task_sort_key($b) } @_ }
+
+# ============================================================
+# DISPLAY HELPERS
+# ============================================================
+
+sub display_status {
+    my ($t) = @_;
+    return 'blocked' if ($t->{blocked_by} // '') ne '';
+    return $t->{status} // 'todo';
+}
+
+sub fmt_date {
+    my ($d) = @_;
+    return '' unless defined $d && $d ne '';
+    return substr($d, 0, 10);
+}
+
+sub print_table {
+    my @tasks = @_;
+    my $cols = 80;
+    eval { ($cols) = GetTerminalSize() };
+    my $title_w = max(10, $cols - 72);
+    printf "%-4s %-9s %-12s %-*s %-10s %-10s %-4s %s\n",
+        'ID', 'STATUS', 'PROJECT', $title_w, 'TITLE',
+        'SCHEDULED', 'DUE', 'PRI', 'TAGS';
+    print '-' x $cols, "\n";
+    for my $t (@tasks) {
+        my $desc_star = ($t->{description} // '') ne '' ? '*' : ' ';
+        printf "%-4s %-9s %-12s %-*s %-10s %-10s %-4s %-20s%s\n",
+            $t->{id} // '',
+            substr(display_status($t), 0, 9),
+            substr($t->{project} // '', 0, 12),
+            $title_w, substr($t->{title} // '', 0, $title_w),
+            fmt_date($t->{scheduled}),
+            fmt_date($t->{due}),
+            $t->{priority} // '',
+            substr($t->{tags} // '', 0, 20),
+            $desc_star;
+    }
+}
+
+# ============================================================
+# YAML EDIT
+# ============================================================
+
+sub task_to_yaml_hash {
+    my ($t) = @_;
+    return {
+        title       => $t->{title}       // '',
+        status      => $t->{status}      // 'todo',
+        project     => $t->{project}     // '',
+        scheduled   => $t->{scheduled}   // '',
+        due         => $t->{due}         // '',
+        priority    => $t->{priority}    // '',
+        tags        => $t->{tags}        // '',
+        blocked_by  => $t->{blocked_by}  // '',
+        description => $t->{description} // '',
+    };
+}
+
+sub edit_task_yaml {
+    my ($t) = @_;
+    my $editor = $ENV{VISUAL} || $ENV{EDITOR} || 'vi';
+    my $yaml   = YAML::Tiny->new(task_to_yaml_hash($t));
+    my ($fh, $fname) = tempfile(SUFFIX => '.yaml', UNLINK => 0);
+    print $fh $yaml->write_string;
+    close $fh;
+    system($editor, $fname);
+    open my $rfh, '<:encoding(UTF-8)', $fname
+        or die "Cannot read $fname: $!\n";
+    my $content = do { local $/; <$rfh> };
+    close $rfh;
+    unlink $fname;
+    my $data = YAML::Tiny->read_string($content)
+        or die 'YAML parse error: ' . YAML::Tiny->errstr . "\n";
+    my $h = $data->[0] // {};
+    for my $f (qw(title status project scheduled due priority tags blocked_by description)) {
+        $t->{$f} = $h->{$f} // '';
+    }
+    return $t;
+}
+
+# ============================================================
+# PARSE TASK STRING  (+tag  ^project  title words)
+# ============================================================
+
+sub parse_task_string {
+    my ($str) = @_;
+    my (@tags, $project, @words);
+    for my $w (split /\s+/, $str) {
+        if    ($w =~ /^\+(.+)$/) { push @tags, $1; }
+        elsif ($w =~ /^\^(.+)$/) { $project = $1; }
+        else                     { push @words, $w; }
+    }
+    return (
+        title   => join(' ', @words),
+        project => $project // '',
+        tags    => join(' ', @tags),
+    );
+}
+
+# ============================================================
+# COMMANDS
+# ============================================================
+
+sub cmd_add {
+    my @args = preprocess_timespec_args(@_);
+    my ($opt_e, $opt_t);
+    GetOptionsFromArray(\@args, 'e' => \$opt_e, 't=s' => \$opt_t);
+    my $str = join(' ', @args);
+
+    my %fields = parse_task_string($str);
+    my @tasks  = load_tasks();
+    my %task   = (
+        id          => next_id(@tasks),
+        status      => 'todo',
+        project     => $fields{project},
+        title       => $fields{title},
+        scheduled   => '',
+        due         => defined $opt_t ? parse_timespec($opt_t) : '',
+        priority    => '',
+        blocked_by  => '',
+        tags        => $fields{tags},
+        description => '',
+    );
+    edit_task_yaml(\%task) if $opt_e;
+    push @tasks, \%task;
+    save_tasks(@tasks);
+    printf "Added task %d: %s\n", $task{id}, $task{title};
+}
+
+sub cmd_schedule {
+    my @args = preprocess_timespec_args(@_);
+    my $opt_t;
+    GetOptionsFromArray(\@args, 't=s' => \$opt_t);
+    my $query = join(' ', @args);
+    my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
+    my @tasks = load_tasks();
+    my $n = 0;
+    for my $t (@tasks) {
+        next unless match_tasks($query, $t);
+        $t->{scheduled} = $date;
+        $n++;
+    }
+    save_tasks(@tasks);
+    printf "Scheduled %d task(s) for %s\n", $n, $date;
+}
+
+sub cmd_due {
+    my @args = preprocess_timespec_args(@_);
+    my $opt_t;
+    GetOptionsFromArray(\@args, 't=s' => \$opt_t);
+    my $query = join(' ', @args);
+    my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
+    my @tasks = load_tasks();
+    my $n = 0;
+    for my $t (@tasks) {
+        next unless match_tasks($query, $t);
+        $t->{due} = $date;
+        $n++;
+    }
+    save_tasks(@tasks);
+    printf "Set due date of %d task(s) to %s\n", $n, $date;
+}
+
+sub cmd_block {
+    my @args  = @_;
+    my $id    = shift @args;
+    defined $id or die "Usage: block <id> <query>\n";
+    my $query = join(' ', @args);
+    $query ne '' or die "Usage: block <id> <query>\n";
+    my @tasks = load_tasks();
+    my $n = 0;
+    for my $t (@tasks) {
+        next unless match_tasks($query, $t);
+        $t->{blocked_by} = $id;
+        $n++;
+    }
+    save_tasks(@tasks);
+    printf "Blocked %d task(s) by task %s\n", $n, $id;
+}
+
+sub cmd_list {
+    my @args = @_;
+    my ($opt_a, $opt_d);
+    GetOptionsFromArray(\@args, 'a' => \$opt_a, 'd' => \$opt_d);
+    my $query = join(' ', @args);
+    my @tasks = load_tasks();
+    my @show;
+    if ($opt_d) {
+        @show = grep { ($_->{status} // '') eq 'complete' } @tasks;
+    } elsif ($opt_a) {
+        @show = @tasks;
+    } else {
+        @show = grep { ($_->{status} // '') ne 'complete' } @tasks;
+    }
+    @show = match_tasks($query, @show) if $query ne '';
+    print_table(sort_tasks(@show));
+}
+
+sub cmd_kill {
+    my $query = join(' ', @_);
+    my @tasks   = load_tasks();
+    my @removed = match_tasks($query, @tasks);
+    return print "No matching tasks\n" unless @removed;
+    my %rm = map { $_->{id} => 1 } @removed;
+    save_tasks(grep { !$rm{$_->{id}} } @tasks);
+    printf "Deleted %d task(s)\n", scalar @removed;
+}
+
+sub cmd_complete {
+    my $query = join(' ', @_);
+    my @tasks = load_tasks();
+    my $n = 0;
+    for my $t (@tasks) {
+        next unless match_tasks($query, $t);
+        $t->{status} = 'complete';
+        $n++;
+    }
+    save_tasks(@tasks);
+    printf "Marked %d task(s) complete\n", $n;
+}
+
+sub cmd_waiting {
+    my $query = join(' ', @_);
+    my @tasks = load_tasks();
+    my $n = 0;
+    for my $t (@tasks) {
+        next unless match_tasks($query, $t);
+        $t->{status} = 'waiting';
+        $n++;
+    }
+    save_tasks(@tasks);
+    printf "Marked %d task(s) waiting\n", $n;
+}
+
+sub cmd_edit {
+    my $query = join(' ', @_);
+    my @tasks = load_tasks();
+    my $n = 0;
+    for my $t (@tasks) {
+        next unless match_tasks($query, $t);
+        edit_task_yaml($t);
+        $n++;
+    }
+    save_tasks(@tasks) if $n;
+    printf "Edited %d task(s)\n", $n;
+}
+
+sub cmd_today {
+    my $today = strftime('%Y-%m-%d', localtime);
+    my @tasks = load_tasks();
+    my @show  = grep {
+        ($_->{status} // '') ne 'complete' &&
+        (($_->{scheduled} // '') eq $today || ($_->{due} // '') eq $today)
+    } @tasks;
+    print_table(sort_tasks(@show));
+}
+
+# ============================================================
+# TUI
+# ============================================================
+
+sub _esc  { "\033[$_[0]" }
+sub _goto { "\033[$_[0];$_[1]H" }
+
+use constant {
+    CLEAR    => "\033[2J\033[H",
+    CLR_EOL  => "\033[K",
+    BOLD     => "\033[1m",
+    REVERSE  => "\033[7m",
+    YELLOW   => "\033[33m",
+    CYAN     => "\033[36m",
+    RESET    => "\033[0m",
+};
+
+sub tui_read_key {
+    my $ch = ReadKey(0);
+    return ('') unless defined $ch;
+    if (ord($ch) == 27) {                        # ESC
+        my $c2 = ReadKey(0.15);
+        return ('esc') unless defined $c2;
+        if ($c2 eq '[') {
+            my $c3 = ReadKey(0.05) // '';
+            # consume extra bytes for longer sequences
+            if ($c3 =~ /[0-9;]/) {
+                my $extra = ReadKey(0.05) // '';
+                return ('csi', $c3 . $extra);
+            }
+            return ('up')    if $c3 eq 'A';
+            return ('down')  if $c3 eq 'B';
+            return ('right') if $c3 eq 'C';
+            return ('left')  if $c3 eq 'D';
+            return ('csi', $c3);
+        }
+        return ('meta', $c2);
+    }
+    return ($ch);
+}
+
+sub tui_prompt {
+    my ($rows, $cols, $prompt) = @_;
+    print _goto($rows, 1), CLR_EOL, $prompt;
+    ReadMode('normal');
+    my $input = <STDIN>;
+    chomp $input if defined $input;
+    ReadMode('raw');
+    return $input // '';
+}
+
+sub tui_draw {
+    my ($rows, $cols, $disp, $row_map, $cur, $scroll, $search, $narrow) = @_;
+    print CLEAR;
+    my $title_w = max(10, $cols - 72);
+    printf BOLD . "%-4s %-9s %-12s %-*s %-10s %-10s %-4s %s\n" . RESET,
+        'ID', 'STATUS', 'PROJECT', $title_w, 'TITLE',
+        'SCHEDULED', 'DUE', 'PRI', 'TAGS';
+    print '-' x $cols, "\n";
+
+    my $visible = $rows - 3;
+    $visible = 1 if $visible < 1;
+
+    for my $i ($scroll .. $scroll + $visible - 1) {
+        last if $i >= @$row_map;
+        my $rm     = $row_map->[$i];
+        my $t      = $rm->{task};
+        my $is_cur = ($i == $cur);
+        my $pfx    = $is_cur ? REVERSE : '';
+        my $sfx    = $is_cur ? RESET   : '';
+
+        if ($rm->{type} eq 'desc') {
+            my $desc = $t->{description} // '';
+            $desc =~ s/\n/ | /g;
+            printf "%s    %-*s%s\n", $pfx, $cols - 5, substr($desc, 0, $cols - 5), $sfx;
+        } else {
+            my $status = display_status($t);
+            my $star   = ($t->{description} // '') ne '' ? '*' : ' ';
+            my $title  = substr($t->{title} // '', 0, $title_w);
+
+            # Highlight search match in title
+            if ($search ne '' && $title =~ /\Q$search\E/i) {
+                (my $ht = $title) =~ s/(\Q$search\E)/YELLOW.BOLD.$1.RESET.($is_cur ? REVERSE : '')/ige;
+                printf "%s%-4s %-9s %-12s %-*s %-10s %-10s %-4s %-20s%s%s\n",
+                    $pfx,
+                    $t->{id} // '', substr($status, 0, 9),
+                    substr($t->{project} // '', 0, 12),
+                    $title_w, $ht,
+                    fmt_date($t->{scheduled}), fmt_date($t->{due}),
+                    $t->{priority} // '',
+                    substr($t->{tags} // '', 0, 20),
+                    $star, $sfx;
+            } else {
+                printf "%s%-4s %-9s %-12s %-*s %-10s %-10s %-4s %-20s%s%s\n",
+                    $pfx,
+                    $t->{id} // '', substr($status, 0, 9),
+                    substr($t->{project} // '', 0, 12),
+                    $title_w, $title,
+                    fmt_date($t->{scheduled}), fmt_date($t->{due}),
+                    $t->{priority} // '',
+                    substr($t->{tags} // '', 0, 20),
+                    $star, $sfx;
+            }
+        }
+    }
+
+    # Status bar
+    my $info = sprintf 'Tasks: %d  Row: %d/%d%s%s  q:quit  ?:help',
+        scalar @$disp,
+        (@$row_map ? $cur + 1 : 0), scalar @$row_map,
+        $narrow ne '' ? "  [project:$narrow]" : '',
+        $search ne '' ? "  [search:$search]"  : '';
+    print _goto($rows, 1), CLR_EOL, REVERSE,
+          sprintf("%-*s", $cols, substr($info, 0, $cols)), RESET;
+}
+
+sub tui_update_task {
+    my ($id, %changes) = @_;
+    my @all = load_tasks();
+    for my $t (@all) {
+        if (($t->{id} // 0) == $id) {
+            $t->{$_} = $changes{$_} for keys %changes;
+        }
+    }
+    save_tasks(@all);
+}
+
+sub cmd_ui {
+    my $cur     = 0;
+    my $scroll  = 0;
+    my %expanded;
+    my $search  = '';
+    my $narrow  = '';
+
+    ReadMode('raw');
+    local $SIG{TERM} = sub { ReadMode('restore'); exit 0 };
+    local $SIG{INT}  = sub { ReadMode('restore'); exit 0 };
+    local $SIG{WINCH} = sub { };    # repaint on next loop
+
+    my $ok = eval {
+        my $quit = 0;
+        while (!$quit) {
+            my ($cols, $rows) = GetTerminalSize();
+            $cols //= 80; $rows //= 24;
+
+            my @all  = load_tasks();
+            my @disp = @all;
+            @disp = grep { ($_->{project} // '') eq $narrow } @disp if $narrow ne '';
+            if ($search ne '') {
+                my $sl = lc $search;
+                @disp = grep {
+                    index(lc($_->{title}   // ''), $sl) >= 0 ||
+                    index(lc($_->{project} // ''), $sl) >= 0 ||
+                    index(lc($_->{tags}    // ''), $sl) >= 0
+                } @disp;
+            }
+            @disp = sort_tasks(@disp);
+
+            # Build row map (task rows + optional expanded description rows)
+            my @row_map;
+            for my $t (@disp) {
+                push @row_map, { task => $t, type => 'task' };
+                if ($expanded{$t->{id} // 0} && ($t->{description} // '') ne '') {
+                    push @row_map, { task => $t, type => 'desc' };
+                }
+            }
+
+            # Clamp cursor
+            $cur = 0 unless @row_map;
+            $cur = 0          if $cur < 0;
+            $cur = $#row_map  if @row_map && $cur > $#row_map;
+
+            # Adjust scroll
+            my $visible = max(1, $rows - 3);
+            $scroll = $cur                    if $cur < $scroll;
+            $scroll = $cur - $visible + 1     if $cur >= $scroll + $visible;
+            $scroll = 0                       if $scroll < 0;
+
+            tui_draw($rows, $cols, \@disp, \@row_map, $cur, $scroll, $search, $narrow);
+
+            my @key = tui_read_key();
+            my $k   = $key[0] // '';
+
+            # ---- navigation ----
+            if    ($k eq 'q' || $k eq 'Q') { $quit = 1; }
+            elsif ($k eq 'j' || $k eq "\x0e" || $k eq 'down') {
+                $cur++ if $cur < $#row_map;
+            }
+            elsif ($k eq 'k' || $k eq "\x10" || $k eq 'up') {
+                $cur-- if $cur > 0;
+            }
+            elsif ($k eq 'g') { $cur = 0; }
+            elsif ($k eq 'G') { $cur = max(0, scalar(@row_map) - 1); }
+            elsif ($k eq "\x0c") { }    # ^L — just repaint
+
+            # ESC and meta keys
+            elsif ($k eq 'esc') { }     # standalone ESC — ignore
+            elsif ($k eq 'meta') {
+                my $mc = $key[1] // '';
+                if    ($mc eq '<')        { $cur = 0; }
+                elsif ($mc eq '>')        { $cur = max(0, $#row_map); }
+                elsif (lc($mc) eq 'u')    { $search = ''; }
+            }
+
+            # ---- Enter: expand/collapse description ----
+            elsif ($k eq "\r" || $k eq "\n" || $k eq "\x0d") {
+                if (@row_map && $row_map[$cur]{type} eq 'task') {
+                    my $tid = $row_map[$cur]{task}{id} // 0;
+                    if ($expanded{$tid}) { delete $expanded{$tid}; }
+                    else                 { $expanded{$tid} = 1;    }
+                }
+            }
+
+            # ---- c: toggle complete/todo ----
+            elsif ($k eq 'c') {
+                if (@row_map) {
+                    my $tid = $row_map[$cur]{task}{id} // 0;
+                    my @all2 = load_tasks();
+                    for my $t (@all2) {
+                        if (($t->{id} // 0) == $tid) {
+                            $t->{status} = ($t->{status}//'') eq 'complete' ? 'todo' : 'complete';
+                        }
+                    }
+                    save_tasks(@all2);
+                }
+            }
+
+            # ---- w: mark waiting ----
+            elsif ($k eq 'w') {
+                if (@row_map) {
+                    my $tid = $row_map[$cur]{task}{id} // 0;
+                    tui_update_task($tid, status => 'waiting');
+                }
+            }
+
+            # ---- b: set blocked_by ----
+            elsif ($k eq 'b') {
+                my $bid = tui_prompt($rows, $cols, 'Block by task ID: ');
+                if ($bid =~ /^\d+$/ && @row_map) {
+                    my $tid = $row_map[$cur]{task}{id} // 0;
+                    tui_update_task($tid, blocked_by => $bid);
+                }
+            }
+
+            # ---- s: set scheduled date ----
+            elsif ($k eq 's') {
+                my $ds = tui_prompt($rows, $cols, 'Schedule (timespec): ');
+                if ($ds ne '' && @row_map) {
+                    my $tid = $row_map[$cur]{task}{id} // 0;
+                    tui_update_task($tid, scheduled => parse_timespec($ds));
+                }
+            }
+
+            # ---- d: set due date ----
+            elsif ($k eq 'd') {
+                my $ds = tui_prompt($rows, $cols, 'Due (timespec): ');
+                if ($ds ne '' && @row_map) {
+                    my $tid = $row_map[$cur]{task}{id} // 0;
+                    tui_update_task($tid, due => parse_timespec($ds));
+                }
+            }
+
+            # ---- +: add tags ----
+            elsif ($k eq '+') {
+                my $tags = tui_prompt($rows, $cols, 'Add tags: ');
+                if ($tags ne '' && @row_map) {
+                    my $tid = $row_map[$cur]{task}{id} // 0;
+                    my @all2 = load_tasks();
+                    for my $t (@all2) {
+                        if (($t->{id} // 0) == $tid) {
+                            $t->{tags} = join(' ', grep { $_ ne '' } $t->{tags} // '', $tags);
+                        }
+                    }
+                    save_tasks(@all2);
+                }
+            }
+
+            # ---- ^: set project ----
+            elsif ($k eq '^') {
+                my $proj = tui_prompt($rows, $cols, 'Set project: ');
+                if (@row_map) {
+                    my $tid = $row_map[$cur]{task}{id} // 0;
+                    tui_update_task($tid, project => $proj);
+                }
+            }
+
+            # ---- e: edit in $EDITOR ----
+            elsif ($k eq 'e') {
+                if (@row_map) {
+                    my $tid = $row_map[$cur]{task}{id} // 0;
+                    ReadMode('normal');
+                    my @all2 = load_tasks();
+                    for my $t (@all2) {
+                        edit_task_yaml($t) if ($t->{id} // 0) == $tid;
+                    }
+                    save_tasks(@all2);
+                    ReadMode('raw');
+                }
+            }
+
+            # ---- /: search ----
+            elsif ($k eq '/') {
+                $search = tui_prompt($rows, $cols, '/');
+                $cur    = 0;
+                $scroll = 0;
+            }
+
+            # ---- :: command prompt ----
+            elsif ($k eq ':') {
+                my $cmd_line = tui_prompt($rows, $cols, ':');
+                if ($cmd_line ne '') {
+                    ReadMode('normal');
+                    print "\n";
+                    eval { dispatch_command(split /\s+/, $cmd_line) };
+                    warn $@ if $@;
+                    print "\nPress any key to continue...";
+                    ReadMode('raw');
+                    ReadKey(0);
+                }
+            }
+
+            # ---- ): narrow to current task's project ----
+            elsif ($k eq ')') {
+                if (@row_map) {
+                    $narrow = $row_map[$cur]{task}{project} // '';
+                    $cur    = 0;
+                    $scroll = 0;
+                }
+            }
+
+            # ---- (: clear narrowing ----
+            elsif ($k eq '(') {
+                $narrow = '';
+                $cur    = 0;
+                $scroll = 0;
+            }
+
+            # ---- ?: help ----
+            elsif ($k eq '?') {
+                ReadMode('normal');
+                print CLEAR;
+                print <<'HELP';
+tdone TUI key bindings:
+
+  j / ^N / Down   Move highlight down
+  k / ^P / Up     Move highlight up
+  g / ESC-<       Move to top
+  G / ESC->       Move to bottom
+  ^L              Repaint screen
+  RET             Expand/collapse task description
+  c               Toggle task complete/incomplete
+  w               Mark task waiting
+  b               Prompt for blocking task ID
+  s               Set scheduled date (timespec)
+  d               Set due date (timespec)
+  +               Add tags
+  ^               Set project
+  e               Edit task in $EDITOR
+  /               Search tasks
+  ESC-u / M-u     Clear search highlighting
+  :               Enter command
+  )               Narrow to current task's project
+  (               Clear narrowing
+  q               Quit
+
+Press any key...
+HELP
+                ReadMode('raw');
+                ReadKey(0);
+            }
+        }
+        1;
+    };
+
+    ReadMode('restore');
+    print CLEAR;
+    die $@ if !$ok && $@;
+}
+
+# ============================================================
+# COMMAND DISPATCH
+# ============================================================
+
+my %CMD = (
+    add      => \&cmd_add,
+    schedule => \&cmd_schedule,
+    due      => \&cmd_due,
+    block    => \&cmd_block,
+    list     => \&cmd_list,
+    ls       => \&cmd_list,
+    kill     => \&cmd_kill,
+    complete => \&cmd_complete,
+    waiting  => \&cmd_waiting,
+    ui       => \&cmd_ui,
+    edit     => \&cmd_edit,
+    today    => \&cmd_today,
+);
+
+sub dispatch_command {
+    my @args = @_;
+    return unless @args;
+    my $verb = lc shift @args;
+
+    if (exists $CMD{$verb}) {
+        $CMD{$verb}->(@args);
+        return;
+    }
+
+    # Prefix matching (abbreviations), but skip 'ls' when matching prefixes
+    my @matches = grep { /^\Q$verb\E/i && $_ ne 'ls' } keys %CMD;
+    push @matches, 'ls' if 'ls' =~ /^\Q$verb\E/i && !grep { $_ eq 'ls' } @matches;
+
+    if (@matches == 1) {
+        $CMD{$matches[0]}->(@args);
+        return;
+    }
+    if (@matches > 1) {
+        die "Ambiguous command '$verb': " . join(', ', sort @matches) . "\n";
+    }
+    die "Unknown command: $verb\nTry: " . join(', ', sort keys %CMD) . "\n";
+}
+
+# ============================================================
+# MAIN
+# ============================================================
+
+if (@ARGV) {
+    dispatch_command(@ARGV);
+} else {
+    cmd_ui();
+}
