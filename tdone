@@ -6,7 +6,7 @@ use POSIX         qw(strftime mktime);
 use File::Temp    qw(tempfile);
 use Path::Tiny;
 use List::Util    qw(max);
-use Getopt::Long  qw(GetOptionsFromArray);
+use Getopt::Std   qw(getopts);
 use YAML::Tiny;
 use Term::ReadKey;
 
@@ -157,6 +157,15 @@ sub parse_timespec {
     return '';
 }
 
+sub parse_opts {
+    my ($optstring, $args_ref) = @_;
+    my %opts;
+    local @ARGV = @$args_ref;
+    getopts($optstring, \%opts) or die "Invalid option(s)\n";
+    @$args_ref = @ARGV;
+    return %opts;
+}
+
 # ============================================================
 # TASK MATCHING AND SORTING
 # ============================================================
@@ -291,8 +300,8 @@ sub parse_task_string {
 
 sub cmd_add {
     my @args = @_;
-    my ($opt_e, $opt_t);
-    GetOptionsFromArray(\@args, 'e' => \$opt_e, 't=s' => \$opt_t);
+    my %opts = parse_opts('et:', \@args);
+    my ($opt_e, $opt_t) = ($opts{e}, $opts{t});
     my $str = join(' ', @args);
 
     my %fields = parse_task_string($str);
@@ -317,8 +326,8 @@ sub cmd_add {
 
 sub cmd_schedule {
     my @args = @_;
-    my $opt_t;
-    GetOptionsFromArray(\@args, 't=s' => \$opt_t);
+    my %opts = parse_opts('t:', \@args);
+    my $opt_t = $opts{t};
     my $query = join(' ', @args);
     my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
     my @tasks = load_tasks();
@@ -334,8 +343,8 @@ sub cmd_schedule {
 
 sub cmd_due {
     my @args = @_;
-    my $opt_t;
-    GetOptionsFromArray(\@args, 't=s' => \$opt_t);
+    my %opts = parse_opts('t:', \@args);
+    my $opt_t = $opts{t};
     my $query = join(' ', @args);
     my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
     my @tasks = load_tasks();
@@ -368,8 +377,8 @@ sub cmd_block {
 
 sub cmd_list {
     my @args = @_;
-    my ($opt_a, $opt_d);
-    GetOptionsFromArray(\@args, 'a' => \$opt_a, 'd' => \$opt_d);
+    my %opts = parse_opts('ad', \@args);
+    my ($opt_a, $opt_d) = ($opts{a}, $opts{d});
     my $query = join(' ', @args);
     my @tasks = load_tasks();
     my @show;
