@@ -200,8 +200,11 @@ sub sort_tasks { sort { task_sort_key($a) cmp task_sort_key($b) } @_ }
 
 sub display_status {
     my ($t) = @_;
-    return 'blocked' if ($t->{blocked_by} // '') ne '';
-    return $t->{status} // 'todo';
+    return '[=]' if ($t->{blocked_by} // '') ne '';
+    my $s = $t->{status} // 'todo';
+    return '[X]' if $s eq 'complete';
+    return '[~]' if $s eq 'waiting';
+    return '[ ]';
 }
 
 sub fmt_date {
