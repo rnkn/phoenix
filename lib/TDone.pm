@@ -6,7 +6,6 @@ use POSIX         qw(strftime mktime);
 use File::Temp    qw(tempfile);
 use Path::Tiny;
 use List::Util    qw(max);
-use Getopt::Std   qw(getopts);
 use YAML::Tiny;
 use Term::ReadKey;
 
@@ -169,30 +168,31 @@ sub parse_timespec {
 
 sub parse_opts {
     my ($optstring, $args_ref) = @_;
+    my %takes_value;
+    while ($optstring =~ /([a-zA-Z])(:?)/g) {
+        $takes_value{$1} = ($2 eq ':');
+    }
     my %opts;
-    local @ARGV = @$args_ref;
-    getopts($optstring, \%opts) or die "Invalid option(s)\n";
-    @$args_ref = @ARGV;
-    return %opts;
-}
-
-# Extract all occurrences of -FLAG VALUE from args, returning the values.
-# Modifies @$args_ref in place (removes the -FLAG VALUE pairs).
-sub collect_flags {
-    my ($flag, $args_ref) = @_;
-    my @values;
     my @remaining;
     my $i = 0;
     while ($i < @$args_ref) {
-        if ($args_ref->[$i] eq "-$flag" && $i + 1 < @$args_ref) {
-            push @values, $args_ref->[++$i];
+        my $arg = $args_ref->[$i];
+        if ($arg =~ /^-([a-zA-Z])$/) {
+            my $flag = $1;
+            die "Unknown option: -$flag\n" unless exists $takes_value{$flag};
+            if ($takes_value{$flag}) {
+                die "Option -$flag requires a value\n" unless $i + 1 < @$args_ref;
+                push @{$opts{$flag}}, $args_ref->[++$i];
+            } else {
+                $opts{$flag} = 1;
+            }
         } else {
-            push @remaining, $args_ref->[$i];
+            push @remaining, $arg;
         }
         $i++;
     }
     @$args_ref = @remaining;
-    return @values;
+    return %opts;
 }
 
 # ============================================================
@@ -464,7 +464,7 @@ sub parse_todo_string {
 sub cmd_add {
     my @args = @_;
     my %opts = parse_opts('et:', \@args);
-    my ($opt_e, $opt_t) = ($opts{e}, $opts{t});
+    my ($opt_e, $opt_t) = ($opts{e}, defined $opts{t} ? $opts{t}[-1] : undef);
     my $str = join(' ', @args);
 
     my %fields = parse_todo_string($str);
@@ -490,7 +490,7 @@ sub cmd_add {
 sub cmd_schedule {
     my @args = @_;
     my %opts = parse_opts('t:', \@args);
-    my $opt_t = $opts{t};
+    my $opt_t = defined $opts{t} ? $opts{t}[-1] : undef;
     my $query = join(' ', @args);
     my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
     my @todos = load_todos();
@@ -507,7 +507,7 @@ sub cmd_schedule {
 sub cmd_due {
     my @args = @_;
     my %opts = parse_opts('t:', \@args);
-    my $opt_t = $opts{t};
+    my $opt_t = defined $opts{t} ? $opts{t}[-1] : undef;
     my $query = join(' ', @args);
     my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
     my @todos = load_todos();
@@ -523,17 +523,16 @@ sub cmd_due {
 
 sub cmd_block {
     my @args  = @_;
-    my %opts  = parse_opts('i:', \@args);
-    my $id    = $opts{i} // die "Usage: block -i <id> <query>\n";
-    my $query = join(' ', @args);
-    $query or die "Usage: block -i <id> <query>\n";
-    my @todos   = load_todos();
-    my @blockers = match_todos($query, @todos);
-    return print "No todos matching '$query'\n" unless @blockers;
+    my ($id, $blockers_query) = @args;
+    die "Usage: block <id> <query>\n" unless defined $id && $id =~ /^\d+$/ && defined $blockers_query;
+    my @todos    = load_todos();
+    my @blocked  = grep { ($_->{id} // 0) == $id } @todos;
+    return print "No todo with id '$id'\n" unless @blocked;
+    my @blockers = match_todos($blockers_query, @todos);
+    return print "No todos matching '$blockers_query'\n" unless @blockers;
     my %blocker_ids = map { $_->{id} => 1 } @blockers;
     my $n = 0;
-    for my $t (@todos) {
-        next unless ($t->{id} // 0) == $id;
+    for my $t (@blocked) {
         my @existing = grep { /\S/ } split(/\s+/, $t->{blocked_by} // '');
         my %seen = map { $_ => 1 } @existing;
         my @new_blockers = grep { !$seen{$_} } sort keys %blocker_ids;
@@ -541,15 +540,16 @@ sub cmd_block {
         $n++;
     }
     save_todos(@todos);
-    printf "Todo %s is now blocked by %d todo(s)\n", $id, scalar keys %blocker_ids;
+    printf "%d todo(s) now blocked by %d todo(s)\n", $n, scalar keys %blocker_ids;
 }
 
 sub get_list_todos {
     my @args = @_;
-    my @filter_tags     = collect_flags('x', \@args);
-    my @filter_projects = collect_flags('p', \@args);
-    my %opts = parse_opts('adA:B:', \@args);
-    my ($opt_a, $opt_d, $opt_A, $opt_B) = ($opts{a}, $opts{d}, $opts{A}, $opts{B});
+    my %opts = parse_opts('adA:B:x:p:', \@args);
+    my ($opt_a, $opt_d) = ($opts{a}, $opts{d});
+    my ($opt_A, $opt_B) = (defined $opts{A} ? $opts{A}[-1] : undef, defined $opts{B} ? $opts{B}[-1] : undef);
+    my @filter_tags     = @{$opts{x} // []};
+    my @filter_projects = @{$opts{p} // []};
     my $query = join(' ', @args);
     my @todos = load_todos();
     my @show;
@@ -666,10 +666,10 @@ sub cmd_edit {
 
 sub cmd_modify {
     my @args        = @_;
-    my @new_tags    = collect_flags('x', \@args);
-    my @remove_tags = collect_flags('X', \@args);
-    my @projects    = collect_flags('p', \@args);
-    my $project     = @projects ? $projects[-1] : undef;
+    my %opts        = parse_opts('x:X:p:', \@args);
+    my @new_tags    = @{$opts{x} // []};
+    my @remove_tags = @{$opts{X} // []};
+    my $project     = $opts{p} ? $opts{p}[-1] : undef;
     die "Usage: modify <query> [-x <tag>]... [-X <tag>]... [-p <project>]\n"
         unless @new_tags || @remove_tags || defined $project;
     my $query = join(' ', @args);
