@@ -469,7 +469,7 @@ our %CMD = (
     kill     => \&cmd_kill,
     complete => \&cmd_complete,
     waiting  => \&cmd_waiting,
-    ui       => sub { require TDone::TUI; TDone::TUI::cmd_ui(@_) },
+    ui       => sub { eval { require TDone::TUI } or die "Cannot load TDone::TUI: $@\n"; TDone::TUI::cmd_ui(@_) },
     edit     => \&cmd_edit,
     today    => \&cmd_today,
 );
