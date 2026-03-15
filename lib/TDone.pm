@@ -523,17 +523,16 @@ sub cmd_due {
 
 sub cmd_block {
     my @args  = @_;
-    my %opts  = parse_opts('i:', \@args);
-    my $id    = defined $opts{i} ? $opts{i}[-1] : die "Usage: block -i <id> <query>\n";
-    my $query = join(' ', @args);
-    $query or die "Usage: block -i <id> <query>\n";
-    my @todos   = load_todos();
-    my @blockers = match_todos($query, @todos);
-    return print "No todos matching '$query'\n" unless @blockers;
+    my ($id_query, $blockers_query) = @args;
+    die "Usage: block <id_query> <blockers_query>\n" unless defined $id_query && defined $blockers_query;
+    my @todos    = load_todos();
+    my @blocked  = match_todos($id_query, @todos);
+    return print "No todos matching '$id_query'\n" unless @blocked;
+    my @blockers = match_todos($blockers_query, @todos);
+    return print "No todos matching '$blockers_query'\n" unless @blockers;
     my %blocker_ids = map { $_->{id} => 1 } @blockers;
     my $n = 0;
-    for my $t (@todos) {
-        next unless ($t->{id} // 0) == $id;
+    for my $t (@blocked) {
         my @existing = grep { /\S/ } split(/\s+/, $t->{blocked_by} // '');
         my %seen = map { $_ => 1 } @existing;
         my @new_blockers = grep { !$seen{$_} } sort keys %blocker_ids;
@@ -541,7 +540,7 @@ sub cmd_block {
         $n++;
     }
     save_todos(@todos);
-    printf "Todo %s is now blocked by %d todo(s)\n", $id, scalar keys %blocker_ids;
+    printf "%d todo(s) now blocked by %d todo(s)\n", $n, scalar keys %blocker_ids;
 }
 
 sub get_list_todos {
@@ -670,8 +669,7 @@ sub cmd_modify {
     my %opts        = parse_opts('x:X:p:', \@args);
     my @new_tags    = @{$opts{x} // []};
     my @remove_tags = @{$opts{X} // []};
-    my @projects    = @{$opts{p} // []};
-    my $project     = @projects ? $projects[-1] : undef;
+    my $project     = $opts{p} ? $opts{p}[-1] : undef;
     die "Usage: modify <query> [-x <tag>]... [-X <tag>]... [-p <project>]\n"
         unless @new_tags || @remove_tags || defined $project;
     my $query = join(' ', @args);
