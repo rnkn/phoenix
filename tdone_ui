@@ -1,9 +1,8 @@
 #!/usr/bin/env perl
 use strict;
 use warnings;
-use FindBin;
-use lib "$FindBin::Bin/lib";
-use TDone;
+use FindBin qw($Bin);
+use lib "$Bin/lib", "$Bin/local/lib/perl5";
 use TDone::TUI;
 
 TDone::TUI::cmd_ui(@ARGV);
