@@ -50,11 +50,7 @@ sub tui_prompt {
     my ($rows, $cols, $prompt, $prefill) = @_;
     $prefill //= '';
 
-    $tui_rl //= do {
-        my $rl = Term::ReadLine->new('tdone');
-        $rl->ornaments(0);
-        $rl;
-    };
+    $tui_rl //= Term::ReadLine->new('tdone');
 
     ReadMode('restore');
     print goto_pos($rows, 1), CLR_EOL;
