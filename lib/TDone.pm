@@ -382,7 +382,7 @@ sub cmd_block {
     printf "Blocked %d todo(s) by todo %s\n", $n, $id;
 }
 
-sub cmd_list {
+sub get_list_todos {
     my @args = @_;
     my %opts = parse_opts('adA:B:', \@args);
     my ($opt_a, $opt_d, $opt_A, $opt_B) = ($opts{a}, $opts{d}, $opts{A}, $opts{B});
@@ -417,7 +417,11 @@ sub cmd_list {
         } @show;
     }
     @show = match_todos($query, @show) if $query ne '';
-    print_table(sort_todos(@show));
+    return sort_todos(@show);
+}
+
+sub cmd_list {
+    print_table(get_list_todos(@_));
 }
 
 sub cmd_kill {
@@ -454,6 +458,19 @@ sub cmd_waiting {
     }
     save_tasks(@todos);
     printf "Marked %d todo(s) waiting\n", $n;
+}
+
+sub cmd_reopen {
+    my $query = join(' ', @_);
+    my @todos = load_tasks();
+    my $n = 0;
+    for my $t (@todos) {
+        next unless match_todos($query, $t);
+        $t->{status} = 'todo';
+        $n++;
+    }
+    save_tasks(@todos);
+    printf "Reopened %d todo(s)\n", $n;
 }
 
 sub cmd_edit {
@@ -501,6 +518,7 @@ our %CMD = (
     ls       => \&cmd_list,     # alias — excluded from prefix matching
     kill     => \&cmd_kill,
     complete => \&cmd_complete,
+    reopen   => \&cmd_reopen,
     waiting  => \&cmd_waiting,
     edit     => \&cmd_edit,
     tag      => \&cmd_tag,
