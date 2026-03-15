@@ -248,7 +248,7 @@ sub cmd_ui {
             # ---- X: open prompt to mark a query of todos done ----
             elsif ($k eq 'X') {
                 my $prefill  = 'x ';
-                my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                my $cmd_line = tui_prompt($rows, ':', $prefill);
                 if ($cmd_line) {
                     eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                     warn $@ if $@;
@@ -259,7 +259,7 @@ sub cmd_ui {
             elsif ($k eq 'W') {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    my $cmd_line = tui_prompt($rows, $cols, ':', "waiting $tid");
+                    my $cmd_line = tui_prompt($rows, ':', "waiting $tid");
                     if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
@@ -272,7 +272,7 @@ sub cmd_ui {
                 if (@row_map) {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "block -i $tid ";
-                    my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                    my $cmd_line = tui_prompt($rows, ':', $prefill);
                     if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
@@ -284,7 +284,7 @@ sub cmd_ui {
             elsif ($k eq 'S') {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    my $cmd_line = tui_prompt($rows, $cols, ':', "schedule $tid -t ");
+                    my $cmd_line = tui_prompt($rows, ':', "schedule $tid -t ");
                     if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
@@ -296,7 +296,7 @@ sub cmd_ui {
             elsif ($k eq 'D') {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    my $cmd_line = tui_prompt($rows, $cols, ':', "due $tid -t ");
+                    my $cmd_line = tui_prompt($rows, ':', "due $tid -t ");
                     if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
@@ -308,7 +308,7 @@ sub cmd_ui {
             elsif ($k eq 'K') {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    my $cmd_line = tui_prompt($rows, $cols, ':', "kill $tid");
+                    my $cmd_line = tui_prompt($rows, ':', "kill $tid");
                     if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
@@ -322,7 +322,7 @@ sub cmd_ui {
                 if (@row_map) {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "modify $tid -x ";
-                    my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                    my $cmd_line = tui_prompt($rows, ':', $prefill);
                     if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
@@ -335,7 +335,7 @@ sub cmd_ui {
                 if (@row_map) {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "modify $tid -X ";
-                    my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                    my $cmd_line = tui_prompt($rows, ':', $prefill);
                     if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
@@ -348,7 +348,7 @@ sub cmd_ui {
                 if (@row_map) {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "modify $tid -p ";
-                    my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                    my $cmd_line = tui_prompt($rows, ':', $prefill);
                     if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
@@ -360,7 +360,7 @@ sub cmd_ui {
             elsif ($k eq 'e') {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    my $cmd_line = tui_prompt($rows, $cols, ':', "edit $tid");
+                    my $cmd_line = tui_prompt($rows, ':', "edit $tid");
                     if ($cmd_line) {
                         ReadMode('normal');
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
@@ -383,7 +383,7 @@ sub cmd_ui {
 
             # ---- A: add a new todo via command prompt ----
             elsif ($k eq 'A') {
-                my $cmd_line = tui_prompt($rows, $cols, ':', 'add ');
+                my $cmd_line = tui_prompt($rows, ':', 'add ');
                 if ($cmd_line) {
                     eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                     warn $@ if $@;
@@ -392,7 +392,7 @@ sub cmd_ui {
 
             # ---- /: less(1)-style search (highlight only, n/N to navigate) ----
             elsif ($k eq '/') {
-                $search = tui_prompt($rows, $cols, '/');
+                $search = tui_prompt($rows, '/');
                 # Jump to first match
                 if ($search) {
                     my @matches = search_indices(\@row_map, $search);
@@ -429,7 +429,7 @@ sub cmd_ui {
             # ---- \: open command prompt pre-filled with :list ----
             elsif ($k eq '\\') {
                 my $prefill  = 'list ';
-                my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                my $cmd_line = tui_prompt($rows, ':', $prefill);
                 if ($cmd_line) {
                     my @parts = split /\s+/, $cmd_line;
                     my $verb  = lc($parts[0] // '');
@@ -443,7 +443,7 @@ sub cmd_ui {
 
             # ---- >: narrow by tag (-x flag) ----
             elsif ($k eq '>') {
-                my $tag = tui_prompt($rows, $cols, 'Narrow by tag: ');
+                my $tag = tui_prompt($rows, 'Narrow by tag: ');
                 if ($tag) {
                     push @list_args, '-x', $tag;
                     $cur    = 0;
@@ -460,7 +460,7 @@ sub cmd_ui {
 
             # ---- :: command prompt ----
             elsif ($k eq ':') {
-                my $cmd_line = tui_prompt($rows, $cols, ':');
+                my $cmd_line = tui_prompt($rows, ':');
                 if ($cmd_line) {
                     my @parts = split /\s+/, $cmd_line;
                     my $verb  = lc($parts[0] // '');
