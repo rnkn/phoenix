@@ -5,7 +5,7 @@ use List::Util qw(max min);
 use Term::ReadKey;
 use Term::ReadLine;
 
-use TDone;
+use TDone qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS);
 
 use constant {
     CLEAR    => "\033[2J\033[H",
@@ -17,8 +17,8 @@ use constant {
     RESET    => "\033[0m",
 };
 
-sub _esc  { "\033[$_[0]" }
-sub _goto { "\033[$_[0];$_[1]H" }
+sub esc      { "\033[$_[0]" }
+sub goto_pos { "\033[$_[0];$_[1]H" }
 
 sub tui_read_key {
     my $ch = ReadKey(0);
@@ -57,7 +57,7 @@ sub tui_prompt {
     };
 
     ReadMode('restore');
-    print _goto($rows, 1), CLR_EOL;
+    print goto_pos($rows, 1), CLR_EOL;
     my $input = $tui_rl->readline($prompt, $prefill) // '';
     ReadMode('raw');
     return $input;
@@ -69,10 +69,6 @@ sub tui_draw {
     my ($title_w, $hdr) = TDone::table_layout($cols);
     print BOLD, $hdr, RESET, "\n";
     print '-' x $cols, "\n";
-
-    my ($id, $sta, $prj, $sch, $due, $pri, $tag) =
-        (TDone::W_ID, TDone::W_STATUS, TDone::W_PROJECT, TDone::W_SCHED,
-         TDone::W_DUE, TDone::W_PRI, TDone::W_TAGS);
 
     my $visible = $rows - 2;
     $visible = 1 if $visible < 1;
@@ -99,24 +95,24 @@ sub tui_draw {
                 (my $ht = $title) =~ s/(\Q$search_hl\E)/YELLOW.BOLD.$1.RESET.($is_cur ? REVERSE : '')/ige;
                 # Pad using the visible length of $title (before ANSI codes were added)
                 my $ht_padded = $ht . (' ' x max(0, $title_w - length($title)));
-                printf "%s%-${id}s %-${sta}s %-${prj}s %s %-${sch}.${sch}s %-${due}.${due}s %-${pri}s %-${tag}s%s%s\n",
+                printf "%s%-${W_ID}s %-${W_STATUS}s %-${W_PROJECT}s %s %-${W_SCHED}.${W_SCHED}s %-${W_DUE}.${W_DUE}s %-${W_PRI}s %-${W_TAGS}s%s%s\n",
                     $pfx,
-                    $t->{id} // '', substr($status, 0, $sta),
-                    substr($t->{project} // '', 0, $prj),
+                    $t->{id} // '', substr($status, 0, $W_STATUS),
+                    substr($t->{project} // '', 0, $W_PROJECT),
                     $ht_padded,
                     TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
-                    substr($t->{priority} // '', 0, $pri),
-                    substr($t->{tags} // '', 0, $tag),
+                    substr($t->{priority} // '', 0, $W_PRI),
+                    substr($t->{tags} // '', 0, $W_TAGS),
                     $star, $sfx;
             } else {
-                printf "%s%-${id}s %-${sta}s %-${prj}s %-*s %-${sch}.${sch}s %-${due}.${due}s %-${pri}s %-${tag}s%s%s\n",
+                printf "%s%-${W_ID}s %-${W_STATUS}s %-${W_PROJECT}s %-*s %-${W_SCHED}.${W_SCHED}s %-${W_DUE}.${W_DUE}s %-${W_PRI}s %-${W_TAGS}s%s%s\n",
                     $pfx,
-                    $t->{id} // '', substr($status, 0, $sta),
-                    substr($t->{project} // '', 0, $prj),
+                    $t->{id} // '', substr($status, 0, $W_STATUS),
+                    substr($t->{project} // '', 0, $W_PROJECT),
                     $title_w, $title,
                     TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
-                    substr($t->{priority} // '', 0, $pri),
-                    substr($t->{tags} // '', 0, $tag),
+                    substr($t->{priority} // '', 0, $W_PRI),
+                    substr($t->{tags} // '', 0, $W_TAGS),
                     $star, $sfx;
             }
         }
@@ -124,7 +120,7 @@ sub tui_draw {
 }
 
 # Return indices into @$row_map that match the search term
-sub _search_indices {
+sub search_indices {
     my ($row_map, $search) = @_;
     return () unless $search;
     my $sl = lc $search;
@@ -403,7 +399,7 @@ sub cmd_ui {
                 $search = tui_prompt($rows, $cols, '/');
                 # Jump to first match
                 if ($search) {
-                    my @matches = _search_indices(\@row_map, $search);
+                    my @matches = search_indices(\@row_map, $search);
                     $cur = $matches[0] if @matches;
                 } else {
                     # empty search — stay put
@@ -413,7 +409,7 @@ sub cmd_ui {
             # ---- n: next search match ----
             elsif ($k eq 'n') {
                 if ($search) {
-                    my @matches = _search_indices(\@row_map, $search);
+                    my @matches = search_indices(\@row_map, $search);
                     if (@matches) {
                         my ($next) = grep { $_ > $cur } @matches;
                         $next //= $matches[0];   # wrap around
@@ -425,7 +421,7 @@ sub cmd_ui {
             # ---- ? / N: previous search match (search backward) ----
             elsif ($k eq '?' || $k eq 'N') {
                 if ($search) {
-                    my @matches = _search_indices(\@row_map, $search);
+                    my @matches = search_indices(\@row_map, $search);
                     if (@matches) {
                         my ($prev) = reverse grep { $_ < $cur } @matches;
                         $prev //= $matches[-1];  # wrap around

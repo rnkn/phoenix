@@ -1,6 +1,7 @@
 package TDone;
 use strict;
 use warnings;
+use parent 'Exporter';
 use POSIX         qw(strftime mktime);
 use File::Temp    qw(tempfile);
 use Path::Tiny;
@@ -10,6 +11,7 @@ use YAML::Tiny;
 use Term::ReadKey;
 
 our $VERSION = '0.1.0';
+our @EXPORT_OK = qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS);
 
 # ============================================================
 # DATA FILE
@@ -17,15 +19,13 @@ our $VERSION = '0.1.0';
 
 my @FIELDS = qw(id status project title scheduled due priority blocked_by tags description);
 
-use constant {
-    W_ID      =>  4,
-    W_STATUS  =>  9,
-    W_PROJECT => 12,
-    W_SCHED   => 14,
-    W_DUE     => 14,
-    W_PRI     =>  4,
-    W_TAGS    => 30,
-};
+our $W_ID      =  4;
+our $W_STATUS  =  9;
+our $W_PROJECT = 12;
+our $W_SCHED   = 14;
+our $W_DUE     = 14;
+our $W_PRI     =  4;
+our $W_TAGS    = 30;
 our @TABLE_HEADERS = qw(id status project title scheduled due pri tags);
 
 sub data_file {
@@ -268,7 +268,7 @@ sub display_status {
 
 # Given a cron field string and allowed range [$min..$max], return sorted list
 # of matching integer values.
-sub _expand_cron_field {
+sub expand_cron_field {
     my ($field, $min, $max) = @_;
     my @vals;
     for my $part (split /,/, $field) {
@@ -296,11 +296,11 @@ sub next_cron_occurrence {
     my ($expr, $from_epoch) = @_;
     $from_epoch //= time;
     my ($min_f, $hour_f, $mday_f, $mon_f, $wday_f) = split /\s+/, $expr;
-    my @mins  = _expand_cron_field($min_f,  0, 59);
-    my @hours = _expand_cron_field($hour_f, 0, 23);
-    my @mdays = _expand_cron_field($mday_f, 1, 31);
-    my @mons  = _expand_cron_field($mon_f,  1, 12);
-    my @wdays = _expand_cron_field($wday_f, 0, 6);
+    my @mins  = expand_cron_field($min_f,  0, 59);
+    my @hours = expand_cron_field($hour_f, 0, 23);
+    my @mdays = expand_cron_field($mday_f, 1, 31);
+    my @mons  = expand_cron_field($mon_f,  1, 12);
+    my @wdays = expand_cron_field($wday_f, 0, 6);
     my $mday_star = ($mday_f eq '*');
     my $wday_star = ($wday_f eq '*');
     my $limit = $from_epoch + 2 * 366 * 86400;
@@ -367,14 +367,12 @@ sub fmt_date {
 
 sub table_layout {
     my ($terminal_cols) = @_;
-    my ($id, $sta, $prj, $sch, $due, $pri, $tag) =
-        (W_ID, W_STATUS, W_PROJECT, W_SCHED, W_DUE, W_PRI, W_TAGS);
-    my $fixed   = $id + $sta + $prj + $sch + $due + $pri + $tag + 9;
+    my $fixed   = $W_ID + $W_STATUS + $W_PROJECT + $W_SCHED + $W_DUE + $W_PRI + $W_TAGS + 9;
     my $title_w = max(10, $terminal_cols - $fixed);
-    my $hdr = sprintf "%-${id}s %-${sta}s %-${prj}s %-*s %-${sch}s %-${due}s %-${pri}s %s",
+    my $hdr = sprintf "%-${W_ID}s %-${W_STATUS}s %-${W_PROJECT}s %-*s %-${W_SCHED}s %-${W_DUE}s %-${W_PRI}s %s",
         @TABLE_HEADERS[0,1,2], $title_w, @TABLE_HEADERS[3..7];
-    my $row_fmt = "%-${id}s %-${sta}s %-${prj}s %-*s"
-                . " %-${sch}.${sch}s %-${due}.${due}s %-${pri}s %-${tag}s%s\n";
+    my $row_fmt = "%-${W_ID}s %-${W_STATUS}s %-${W_PROJECT}s %-*s"
+                . " %-${W_SCHED}.${W_SCHED}s %-${W_DUE}.${W_DUE}s %-${W_PRI}s %-${W_TAGS}s%s\n";
     return ($title_w, $hdr, $row_fmt);
 }
 
@@ -390,13 +388,13 @@ sub print_table {
         my $desc_star = $t->{description} ? '*' : ' ';
         printf $row_fmt,
             $t->{id} // '',
-            substr(display_status($t, \%by_id), 0, W_STATUS),
-            substr($t->{project} // '', 0, W_PROJECT),
+            substr(display_status($t, \%by_id), 0, $W_STATUS),
+            substr($t->{project} // '', 0, $W_PROJECT),
             $title_w, substr($t->{title} // '', 0, $title_w),
             fmt_date($t->{scheduled}),
             fmt_date($t->{due}),
-            substr($t->{priority} // '', 0, W_PRI),
-            substr($t->{tags} // '', 0, W_TAGS),
+            substr($t->{priority} // '', 0, $W_PRI),
+            substr($t->{tags} // '', 0, $W_TAGS),
             $desc_star;
     }
 }
