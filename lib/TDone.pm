@@ -1,7 +1,8 @@
 package TDone;
 use strict;
 use warnings;
-use POSIX         qw(strftime);
+use Exporter qw(import);
+use POSIX         qw(strftime mktime);
 use File::Temp    qw(tempfile);
 use Path::Tiny;
 use List::Util    qw(max);
@@ -10,6 +11,7 @@ use YAML::Tiny;
 use Term::ReadKey;
 
 our $VERSION = '0.1.0';
+our @EXPORT_OK = qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS);
 
 # ============================================================
 # DATA FILE
@@ -17,17 +19,26 @@ our $VERSION = '0.1.0';
 
 my @FIELDS = qw(id status project title scheduled due priority blocked_by tags description);
 
+our $W_ID      =  4;
+our $W_STATUS  =  9;
+our $W_PROJECT = 12;
+our $W_SCHED   = 14;
+our $W_DUE     = 14;
+our $W_PRI     =  4;
+our $W_TAGS    = 30;
+our @TABLE_HEADERS = qw(id status project title scheduled due pri tags);
+
 sub data_file {
-    return $ENV{TDONE_FILE} if defined $ENV{TDONE_FILE} && $ENV{TDONE_FILE} ne '';
+    return $ENV{TDONE_FILE} if $ENV{TDONE_FILE};
     my $dir = "$ENV{HOME}/.tdone";
     path($dir)->mkpath unless -d $dir;
     return "$dir/todo.tsv";
 }
 
-sub load_tasks {
+sub load_todos {
     my $file = data_file();
     return () unless -f $file;
-    my @tasks;
+    my @todos;
     for (path($file)->lines_utf8({chomp => 1})) {
         next if /^\s*$/;
         my @vals = split /\t/, $_, scalar @FIELDS;
@@ -35,16 +46,16 @@ sub load_tasks {
         my %t;
         @t{@FIELDS} = @vals;
         $t{description} =~ s/\\n/\n/g;
-        push @tasks, \%t;
+        push @todos, \%t;
     }
-    return @tasks;
+    return @todos;
 }
 
-sub save_tasks {
-    my @tasks = @_;
+sub save_todos {
+    my @todos = @_;
     my $file = data_file();
     my @lines;
-    for my $t (@tasks) {
+    for my $t (@todos) {
         my @vals = map {
             my $v = $t->{$_} // '';
             $v =~ s/\t/    /g;
@@ -57,9 +68,9 @@ sub save_tasks {
 }
 
 sub next_id {
-    my @tasks = @_;
+    my @todos = @_;
     my $max = 0;
-    $max < ($_ // 0) and $max = $_ for map { $_->{id} } @tasks;
+    $max < ($_ // 0) and $max = $_ for map { $_->{id} } @todos;
     return $max + 1;
 }
 
@@ -84,13 +95,13 @@ my %MONTH_MAP = (
 # A valid 5-field crontab expression, e.g. "0 0 * * *" or "*/15 6-22 1,15 * 1-5"
 sub is_cron_expr {
     my ($s) = @_;
-    return 0 unless defined $s && $s ne '';
+    return unless $s;
     return $s =~ /^[\d\*\/,\-]+(?:\s+[\d\*\/,\-]+){4}$/;
 }
 
 sub parse_timespec {
     my ($spec) = @_;
-    return '' unless defined $spec && $spec ne '';
+    return unless $spec;
 
     # Valid 5-field cron expression — store verbatim
     return $spec if is_cron_expr($spec);
@@ -190,7 +201,7 @@ sub collect_flags {
 
 sub match_todos {
     my ($query, @todos) = @_;
-    return @todos unless defined $query && $query ne '';
+    return @todos unless $query;
     if ($query =~ /^\d+$/) {
         return grep { ($_->{id} // 0) == $query } @todos;
     }
@@ -205,8 +216,18 @@ sub match_todos {
 sub todo_sort_key {
     my ($t) = @_;
     my $far   = '9999-12-31';
-    my $due   = ($t->{due}       // '') =~ /^\d{4}/ ? $t->{due}       : $far;
-    my $sched = ($t->{scheduled} // '') =~ /^\d{4}/ ? $t->{scheduled} : $far;
+    my $_eff_date = sub {
+        my ($d) = @_;
+        return $far unless $d;
+        return $d if $d =~ /^\d{4}/;
+        if (is_cron_expr($d)) {
+            my $next = next_cron_occurrence($d);
+            return defined $next ? strftime('%Y-%m-%d', localtime($next)) : $far;
+        }
+        return $far;
+    };
+    my $due   = $_eff_date->($t->{due});
+    my $sched = $_eff_date->($t->{scheduled});
     # Effective date is the earlier of due/scheduled.
     # When both fall on the same date, due takes priority (tie=0) over scheduled (tie=1).
     my $eff = $due lt $sched ? $due : $sched;
@@ -221,14 +242,14 @@ sub sort_todos { sort { todo_sort_key($a) cmp todo_sort_key($b) } @_ }
 # ============================================================
 
 sub display_status {
-    my ($t, $tasks_by_id) = @_;
-    if (($t->{blocked_by} // '') ne '') {
+    my ($t, $todos_by_id) = @_;
+    if ($t->{blocked_by}) {
         my @ids = grep { /\S/ } split(/\s+/, $t->{blocked_by});
         if (@ids) {
-            if ($tasks_by_id) {
+            if ($todos_by_id) {
                 # Blocked if ANY blocking todo is not yet done
                 my $still_blocked = grep {
-                    my $bt = $tasks_by_id->{$_};
+                    my $bt = $todos_by_id->{$_};
                     !$bt || ($bt->{status} // '') ne 'done'
                 } @ids;
                 return '[=]' if $still_blocked;
@@ -240,36 +261,140 @@ sub display_status {
     my $s = $t->{status} // 'todo';
     return '[X]' if $s eq 'done';
     return '[~]' if $s eq 'waiting';
+    # Repeating todo (cron timespec in scheduled or due)
+    return '[*]' if is_cron_expr($t->{scheduled}) || is_cron_expr($t->{due});
     return '[ ]';
+}
+
+# Given a cron field string and allowed range [$min..$max], return sorted list
+# of matching integer values.
+sub expand_cron_field {
+    my ($field, $min, $max) = @_;
+    my @vals;
+    for my $part (split /,/, $field) {
+        if ($part eq '*') {
+            push @vals, $min .. $max;
+        } elsif ($part =~ /^\*\/(\d+)$/) {
+            my $step = $1;
+            push @vals, grep { ($_ - $min) % $step == 0 } $min .. $max;
+        } elsif ($part =~ /^(\d+)-(\d+)\/(\d+)$/) {
+            my ($s, $e, $st) = ($1, $2, $3);
+            push @vals, grep { ($_ - $s) % $st == 0 } $s .. $e;
+        } elsif ($part =~ /^(\d+)-(\d+)$/) {
+            push @vals, $1 .. $2;
+        } elsif ($part =~ /^\d+$/) {
+            push @vals, int($part);
+        }
+    }
+    my %seen;
+    return sort { $a <=> $b } grep { !$seen{$_}++ && $_ >= $min && $_ <= $max } @vals;
+}
+
+# Return the epoch of the next occurrence of a 5-field cron expression
+# after $from_epoch (defaults to now).  Returns undef if none found in 2 years.
+sub next_cron_occurrence {
+    my ($expr, $from_epoch) = @_;
+    $from_epoch //= time;
+    my ($min_f, $hour_f, $mday_f, $mon_f, $wday_f) = split /\s+/, $expr;
+    my @mins  = expand_cron_field($min_f,  0, 59);
+    my @hours = expand_cron_field($hour_f, 0, 23);
+    my @mdays = expand_cron_field($mday_f, 1, 31);
+    my @mons  = expand_cron_field($mon_f,  1, 12);
+    my @wdays = expand_cron_field($wday_f, 0, 6);
+    my $mday_star = ($mday_f eq '*');
+    my $wday_star = ($wday_f eq '*');
+    my $limit = $from_epoch + 2 * 366 * 86400;
+    # Start at the next minute boundary
+    my $t = int($from_epoch / 60) * 60 + 60;
+    while ($t <= $limit) {
+        my @lt = localtime($t);
+        my ($lmin, $lhour, $lmday, $lmon0, $lwday) = @lt[1,2,3,4,6];
+        my $lmon = $lmon0 + 1;
+        # Check month
+        unless (grep { $_ == $lmon } @mons) {
+            # Advance to 1st of next month at 00:00
+            my @nx = @lt;
+            $nx[1] = 0; $nx[2] = 0; $nx[3] = 1; $nx[4]++;
+            if ($nx[4] > 11) { $nx[4] = 0; $nx[5]++; }
+            $t = mktime(@nx);
+            next;
+        }
+        # Check day
+        my $day_ok;
+        if ($mday_star && $wday_star) {
+            $day_ok = 1;
+        } elsif ($mday_star) {
+            $day_ok = grep { $_ == $lwday } @wdays;
+        } elsif ($wday_star) {
+            $day_ok = grep { $_ == $lmday } @mdays;
+        } else {
+            $day_ok = (grep { $_ == $lmday } @mdays) || (grep { $_ == $lwday } @wdays);
+        }
+        unless ($day_ok) {
+            # Advance to next midnight
+            my @nx = @lt;
+            $nx[0] = 0; $nx[1] = 0; $nx[2] = 0; $nx[3]++;
+            $t = mktime(@nx);
+            next;
+        }
+        # Check hour
+        unless (grep { $_ == $lhour } @hours) {
+            # Advance to next hour boundary
+            my @nx = @lt;
+            $nx[0] = 0; $nx[1] = 0; $nx[2]++;
+            $t = mktime(@nx);
+            next;
+        }
+        # Check minute
+        unless (grep { $_ == $lmin } @mins) {
+            $t += 60;
+            next;
+        }
+        return $t;
+    }
+    return undef;
 }
 
 sub fmt_date {
     my ($d) = @_;
-    return '' unless defined $d && $d ne '';
-    return $d;    # YYYY-MM-DD or cron expression — return as-is
+    return '' unless $d;
+    if (is_cron_expr($d)) {
+        my $next = next_cron_occurrence($d);
+        return defined $next ? strftime('%Y-%m-%d', localtime($next)) : $d;
+    }
+    return $d;
+}
+
+sub table_layout {
+    my ($terminal_cols) = @_;
+    my $fixed   = $W_ID + $W_STATUS + $W_PROJECT + $W_SCHED + $W_DUE + $W_PRI + $W_TAGS + 9;
+    my $title_w = max(10, $terminal_cols - $fixed);
+    my $hdr = sprintf "%-${W_ID}s %-${W_STATUS}s %-${W_PROJECT}s %-*s %-${W_SCHED}s %-${W_DUE}s %-${W_PRI}s %s",
+        @TABLE_HEADERS[0,1,2], $title_w, @TABLE_HEADERS[3..7];
+    my $row_fmt = "%-${W_ID}s %-${W_STATUS}s %-${W_PROJECT}s %-*s"
+                . " %-${W_SCHED}.${W_SCHED}s %-${W_DUE}.${W_DUE}s %-${W_PRI}s %-${W_TAGS}s%s\n";
+    return ($title_w, $hdr, $row_fmt);
 }
 
 sub print_table {
     my @todos = @_;
     my $cols = 80;
     eval { ($cols) = GetTerminalSize() };
-    my %by_id = map { $_->{id} => $_ } load_tasks();
-    my $title_w = max(10, $cols - 85);
-    printf "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n",
-        'ID', 'STATUS', 'PROJECT', $title_w, 'TITLE',
-        'SCHEDULED', 'DUE', 'PRI', 'TAGS';
+    my %by_id = map { $_->{id} => $_ } load_todos();
+    my ($title_w, $hdr, $row_fmt) = table_layout($cols);
+    print $hdr, "\n";
     print '-' x $cols, "\n";
     for my $t (@todos) {
-        my $desc_star = ($t->{description} // '') ne '' ? '*' : ' ';
-        printf "%-4s %-9s %-12s %-*s %-14.14s %-14.14s %-4s %-20s%s\n",
+        my $desc_star = $t->{description} ? '*' : ' ';
+        printf $row_fmt,
             $t->{id} // '',
-            substr(display_status($t, \%by_id), 0, 9),
-            substr($t->{project} // '', 0, 12),
+            substr(display_status($t, \%by_id), 0, $W_STATUS),
+            substr($t->{project} // '', 0, $W_PROJECT),
             $title_w, substr($t->{title} // '', 0, $title_w),
             fmt_date($t->{scheduled}),
             fmt_date($t->{due}),
-            substr($t->{priority} // '', 0, 4),
-            substr($t->{tags} // '', 0, 20),
+            substr($t->{priority} // '', 0, $W_PRI),
+            substr($t->{tags} // '', 0, $W_TAGS),
             $desc_star;
     }
 }
@@ -278,7 +403,7 @@ sub print_table {
 # YAML EDIT
 # ============================================================
 
-sub task_to_yaml_hash {
+sub todo_to_yaml_hash {
     my ($t) = @_;
     return {
         title       => $t->{title}       // '',
@@ -293,19 +418,17 @@ sub task_to_yaml_hash {
     };
 }
 
-sub edit_task_yaml {
+sub edit_todo_yaml {
     my ($t) = @_;
     my $editor = $ENV{VISUAL} || $ENV{EDITOR} || 'vi';
-    my $yaml   = YAML::Tiny->new(task_to_yaml_hash($t));
-    my ($fh, $fname) = tempfile(SUFFIX => '.yaml', UNLINK => 0);
-    print $fh $yaml->write_string;
-    close $fh;
+    my (undef, $fname) = tempfile(SUFFIX => '.yaml', UNLINK => 0);
+    my $yaml = YAML::Tiny->new(todo_to_yaml_hash($t));
+    my $yaml_str = $yaml->write_string
+        or die 'YAML serialization error: ' . YAML::Tiny->errstr . "\n";
+    path($fname)->spew_utf8($yaml_str);
     system($editor, $fname);
-    open my $rfh, '<:encoding(UTF-8)', $fname
-        or die "Cannot read $fname: $!\n";
-    my $content = do { local $/; <$rfh> };
-    close $rfh;
-    unlink $fname;
+    my $content = path($fname)->slurp_utf8;
+    path($fname)->remove;
     my $data = YAML::Tiny->read_string($content)
         or die 'YAML parse error: ' . YAML::Tiny->errstr . "\n";
     my $h = $data->[0] // {};
@@ -345,7 +468,7 @@ sub cmd_add {
     my $str = join(' ', @args);
 
     my %fields = parse_todo_string($str);
-    my @todos  = load_tasks();
+    my @todos  = load_todos();
     my %todo   = (
         id          => next_id(@todos),
         status      => 'todo',
@@ -358,9 +481,9 @@ sub cmd_add {
         tags        => $fields{tags},
         description => '',
     );
-    edit_task_yaml(\%todo) if $opt_e;
+    edit_todo_yaml(\%todo) if $opt_e;
     push @todos, \%todo;
-    save_tasks(@todos);
+    save_todos(@todos);
     printf "Added todo %d: %s\n", $todo{id}, $todo{title};
 }
 
@@ -370,14 +493,14 @@ sub cmd_schedule {
     my $opt_t = $opts{t};
     my $query = join(' ', @args);
     my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
-    my @todos = load_tasks();
+    my @todos = load_todos();
     my $n = 0;
     for my $t (@todos) {
         next unless match_todos($query, $t);
         $t->{scheduled} = $date;
         $n++;
     }
-    save_tasks(@todos);
+    save_todos(@todos);
     printf "Scheduled %d todo(s) for %s\n", $n, $date;
 }
 
@@ -387,14 +510,14 @@ sub cmd_due {
     my $opt_t = $opts{t};
     my $query = join(' ', @args);
     my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
-    my @todos = load_tasks();
+    my @todos = load_todos();
     my $n = 0;
     for my $t (@todos) {
         next unless match_todos($query, $t);
         $t->{due} = $date;
         $n++;
     }
-    save_tasks(@todos);
+    save_todos(@todos);
     printf "Set due date of %d todo(s) to %s\n", $n, $date;
 }
 
@@ -403,8 +526,8 @@ sub cmd_block {
     my %opts  = parse_opts('i:', \@args);
     my $id    = $opts{i} // die "Usage: block -i <id> <query>\n";
     my $query = join(' ', @args);
-    $query ne '' or die "Usage: block -i <id> <query>\n";
-    my @todos   = load_tasks();
+    $query or die "Usage: block -i <id> <query>\n";
+    my @todos   = load_todos();
     my @blockers = match_todos($query, @todos);
     return print "No todos matching '$query'\n" unless @blockers;
     my %blocker_ids = map { $_->{id} => 1 } @blockers;
@@ -417,7 +540,7 @@ sub cmd_block {
         $t->{blocked_by} = join(' ', @existing, @new_blockers);
         $n++;
     }
-    save_tasks(@todos);
+    save_todos(@todos);
     printf "Todo %s is now blocked by %d todo(s)\n", $id, scalar keys %blocker_ids;
 }
 
@@ -428,7 +551,7 @@ sub get_list_todos {
     my %opts = parse_opts('adA:B:', \@args);
     my ($opt_a, $opt_d, $opt_A, $opt_B) = ($opts{a}, $opts{d}, $opts{A}, $opts{B});
     my $query = join(' ', @args);
-    my @todos = load_tasks();
+    my @todos = load_todos();
     my @show;
     if ($opt_d) {
         @show = grep { ($_->{status} // '') eq 'done' } @todos;
@@ -471,7 +594,7 @@ sub get_list_todos {
         @show = grep { $proj_set{lc($_->{project} // '')} } @show;
     }
     # Text query searches title and description only
-    if ($query ne '') {
+    if ($query) {
         if ($query =~ /^\d+$/) {
             @show = grep { ($_->{id} // 0) == $query } @show;
         } else {
@@ -491,11 +614,11 @@ sub cmd_list {
 
 sub cmd_kill {
     my $query = join(' ', @_);
-    my @todos   = load_tasks();
+    my @todos   = load_todos();
     my @removed = match_todos($query, @todos);
     return print "No matching todos\n" unless @removed;
     my %rm = map { $_->{id} => 1 } @removed;
-    save_tasks(grep { !$rm{$_->{id}} } @todos);
+    save_todos(grep { !$rm{$_->{id}} } @todos);
     printf "Deleted %d todo(s)\n", scalar @removed;
 }
 
@@ -504,52 +627,53 @@ sub cmd_done {
     my %opts = parse_opts('r', \@args);
     my $query = join(' ', @args);
     my $new_status = $opts{r} ? 'todo' : 'done';
-    my @todos = load_tasks();
+    my @todos = load_todos();
     my $n = 0;
     for my $t (@todos) {
         next unless match_todos($query, $t);
         $t->{status} = $new_status;
         $n++;
     }
-    save_tasks(@todos);
+    save_todos(@todos);
     printf $opts{r} ? "Reopened %d todo(s)\n" : "Marked %d todo(s) done\n", $n;
 }
 
 sub cmd_waiting {
     my $query = join(' ', @_);
-    my @todos = load_tasks();
+    my @todos = load_todos();
     my $n = 0;
     for my $t (@todos) {
         next unless match_todos($query, $t);
         $t->{status} = 'waiting';
         $n++;
     }
-    save_tasks(@todos);
+    save_todos(@todos);
     printf "Marked %d todo(s) waiting\n", $n;
 }
 
 sub cmd_edit {
     my $query = join(' ', @_);
-    my @todos = load_tasks();
+    my @todos = load_todos();
     my $n = 0;
     for my $t (@todos) {
         next unless match_todos($query, $t);
-        edit_task_yaml($t);
+        edit_todo_yaml($t);
         $n++;
     }
-    save_tasks(@todos) if $n;
+    save_todos(@todos) if $n;
     printf "Edited %d todo(s)\n", $n;
 }
 
 sub cmd_modify {
-    my @args     = @_;
-    my @new_tags = collect_flags('x', \@args);
-    my @projects = collect_flags('p', \@args);
-    my $project  = @projects ? $projects[-1] : undef;
-    die "Usage: modify <query> [-x <tag>]... [-p <project>]\n"
-        unless @new_tags || defined $project;
+    my @args        = @_;
+    my @new_tags    = collect_flags('x', \@args);
+    my @remove_tags = collect_flags('X', \@args);
+    my @projects    = collect_flags('p', \@args);
+    my $project     = @projects ? $projects[-1] : undef;
+    die "Usage: modify <query> [-x <tag>]... [-X <tag>]... [-p <project>]\n"
+        unless @new_tags || @remove_tags || defined $project;
     my $query = join(' ', @args);
-    my @todos = load_tasks();
+    my @todos = load_todos();
     my $n = 0;
     for my $t (@todos) {
         next unless match_todos($query, $t);
@@ -559,10 +683,14 @@ sub cmd_modify {
                 $t->{tags} = join(' ', @existing, $tag);
             }
         }
+        for my $tag (@remove_tags) {
+            my @existing = split(/\s+/, $t->{tags} // '');
+            $t->{tags} = join(' ', grep { $_ ne $tag } @existing);
+        }
         $t->{project} = $project if defined $project;
         $n++;
     }
-    save_tasks(@todos);
+    save_todos(@todos);
     printf "Modified %d todo(s)\n", $n;
 }
 
