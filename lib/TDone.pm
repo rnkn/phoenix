@@ -22,7 +22,7 @@ sub data_file {
     return $ENV{TDONE_FILE} if defined $ENV{TDONE_FILE} && $ENV{TDONE_FILE} ne '';
     my $dir = "$ENV{HOME}/.tdone";
     path($dir)->mkpath unless -d $dir;
-    return "$dir/todos.tsv";
+    return "$dir/todo.tsv";
 }
 
 sub load_tasks {
