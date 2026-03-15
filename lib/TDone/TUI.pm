@@ -3,6 +3,7 @@ use strict;
 use warnings;
 use List::Util qw(max min);
 use Term::ReadKey;
+use Term::ReadLine;
 
 use TDone;
 
@@ -43,82 +44,29 @@ sub tui_read_key {
     return ($ch);
 }
 
+my $tui_rl;
+
 sub tui_prompt {
     my ($rows, $cols, $prompt, $prefill) = @_;
     $prefill //= '';
 
-    # Simple line editor: start with prefill in buffer, cursor at end.
-    # Supports: printable chars, Backspace, Del, Left/Right, Home/End, Enter, Ctrl-C/Ctrl-G.
-    my @buf  = split //, $prefill;
-    my $pos  = scalar @buf;
-
-    my $_redraw = sub {
-        my $line = join('', @buf);
-        print _goto($rows, 1), CLR_EOL, $prompt, $line,
-              _goto($rows, 1 + length($prompt) + $pos);
+    $tui_rl //= do {
+        my $rl = Term::ReadLine->new('tdone');
+        $rl->ornaments(0);
+        $rl;
     };
 
-    $_redraw->();
-
-    while (1) {
-        my $ch = ReadKey(0);
-        last unless defined $ch;
-        my $ord = ord($ch);
-
-        if ($ord == 13 || $ord == 10) {        # Enter
-            last;
-        } elsif ($ord == 3 || $ord == 7) {     # Ctrl-C / Ctrl-G => cancel
-            return '';
-        } elsif ($ord == 27) {                 # ESC sequence
-            my $c2 = ReadKey(0.15);
-            if (!defined $c2) {
-                return '';                     # bare ESC => cancel
-            } elsif ($c2 eq '[') {
-                my $c3 = ReadKey(0.05) // '';
-                if ($c3 eq 'A') { }            # up — ignore
-                elsif ($c3 eq 'B') { }         # down — ignore
-                elsif ($c3 eq 'C') { $pos++ if $pos < @buf; } # right
-                elsif ($c3 eq 'D') { $pos-- if $pos > 0;    } # left
-                elsif ($c3 =~ /[0-9;]/) {
-                    # consume longer sequences (e.g. Delete = ESC[3~)
-                    my $extra = ReadKey(0.05) // '';
-                    if ($c3 eq '3' && $extra eq '~' && $pos < @buf) {
-                        splice @buf, $pos, 1;  # Delete key
-                    }
-                }
-            }
-            # other ESC sequences — ignore
-        } elsif ($ord == 1) {                  # Ctrl-A => Home
-            $pos = 0;
-        } elsif ($ord == 5) {                  # Ctrl-E => End
-            $pos = scalar @buf;
-        } elsif ($ord == 127 || $ord == 8) {   # Backspace
-            if ($pos > 0) {
-                splice @buf, $pos - 1, 1;
-                $pos--;
-            }
-        } elsif ($ord == 4) {                  # Ctrl-D (forward delete)
-            splice @buf, $pos, 1 if $pos < @buf;
-        } elsif ($ord == 11) {                 # Ctrl-K => kill to end
-            splice @buf, $pos;
-        } elsif ($ord == 21) {                 # Ctrl-U => kill to start
-            splice @buf, 0, $pos;
-            $pos = 0;
-        } elsif ($ord >= 32 && $ord != 127) {  # Printable character
-            splice @buf, $pos, 0, $ch;
-            $pos++;
-        }
-        $_redraw->();
-    }
-
+    ReadMode('restore');
     print _goto($rows, 1), CLR_EOL;
-    return join('', @buf);
+    my $input = $tui_rl->readline($prompt, $prefill);
+    ReadMode('raw');
+    return defined $input ? $input : '';
 }
 
 sub tui_draw {
     my ($rows, $cols, $row_map, $cur, $scroll, $search_hl, $tasks_by_id) = @_;
     print CLEAR;
-    my $title_w = max(10, $cols - 95);
+    my $title_w = TDone::table_title_width($cols);
     printf BOLD . "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n" . RESET,
         'id', 'status', 'project', $title_w, 'title',
         'scheduled', 'due', 'pri', 'tags';
@@ -439,6 +387,15 @@ sub cmd_ui {
                 }
             }
 
+            # ---- A: add a new task via command prompt ----
+            elsif ($k eq 'A') {
+                my $cmd_line = tui_prompt($rows, $cols, ':', 'add ');
+                if ($cmd_line ne '') {
+                    eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                    warn $@ if $@;
+                }
+            }
+
             # ---- /: less(1)-style search (highlight only, n/N to navigate) ----
             elsif ($k eq '/') {
                 $search = tui_prompt($rows, $cols, '/');
@@ -550,46 +507,47 @@ sub cmd_ui {
             elsif ($k eq 'h') {
                 ReadMode('normal');
                 print CLEAR;
-                print <<'HELP';
-tdone TUI key bindings:
-
-  j / ^N / Down   Move highlight down
-  k / ^P / Up     Move highlight up
-  g / ESC-<       Move to top
-  G / ESC->       Move to bottom
-  ^L              Repaint screen
-  d / ^D          Scroll half a screen down
-  u / ^U          Scroll half a screen up
-  SPC / ^V / f / ^F   Scroll a full screen down
-  b / ^B / ESC-v  Scroll a full screen up
-  RET             Expand/collapse todo description
-  x               Toggle current todo done/incomplete
-  X               Prompt to mark a query of todos done
-  W               Mark todo waiting
-  B               Prompt to block current todo by a query of todos
-  K               Kill (delete) current todo
-  S               Set scheduled date (timespec)
-  D               Set due date (timespec)
-  +               Add tag (modify <id> -x <tag>)
-  -               Remove tag (modify <id> -X <tag>)
-  ^               Set project (modify <id> -p <project>)
-  e               Edit todo in $EDITOR (via prompt)
-  E               Edit current todo immediately in $EDITOR
-  /               Search displayed rows (highlight only)
-  n               Next search match
-  ? / N           Previous search match (search backward)
-  \               Open command prompt with :list
-  >               Narrow by tag (-x)
-  <               Clear list narrowing
-  ESC-u / M-u     Clear search highlighting
-  :               Enter command (list/ls updates display)
-  )               Narrow to current todo's project (-p)
-  (               Clear project narrowing
-  h               This help
-  q               Quit
-
-Press any key...
-HELP
+                my @bindings = (
+                    [ 'j / ^N / Down',       'Move highlight down'                              ],
+                    [ 'k / ^P / Up',         'Move highlight up'                                ],
+                    [ 'g / ESC-<',           'Move to top'                                      ],
+                    [ 'G / ESC->',           'Move to bottom'                                   ],
+                    [ '^L',                  'Repaint screen'                                   ],
+                    [ 'd / ^D',              'Scroll half a screen down'                        ],
+                    [ 'u / ^U',              'Scroll half a screen up'                          ],
+                    [ 'SPC / ^V / f / ^F',   'Scroll a full screen down'                        ],
+                    [ 'b / ^B / ESC-v',      'Scroll a full screen up'                          ],
+                    [ 'RET',                 'Expand/collapse todo description'                 ],
+                    [ 'x',                   'Toggle current todo done/incomplete'              ],
+                    [ 'X',                   'Prompt to mark a query of todos done'             ],
+                    [ 'W',                   'Mark todo waiting'                                ],
+                    [ 'B',                   'Prompt to block current todo by a query of todos' ],
+                    [ 'A',                   'Add a new todo'                                   ],
+                    [ 'K',                   'Kill (delete) current todo'                       ],
+                    [ 'S',                   'Set scheduled date (timespec)'                    ],
+                    [ 'D',                   'Set due date (timespec)'                          ],
+                    [ '+',                   'Add tag (modify <id> -x <tag>)'                   ],
+                    [ '-',                   'Remove tag (modify <id> -X <tag>)'                ],
+                    [ '^',                   'Set project (modify <id> -p <project>)'           ],
+                    [ 'e',                   'Edit todo in $EDITOR (via prompt)'                ],
+                    [ 'E',                   'Edit current todo immediately in $EDITOR'         ],
+                    [ '/',                   'Search displayed rows (highlight only)'           ],
+                    [ 'n',                   'Next search match'                                ],
+                    [ '? / N',               'Previous search match (search backward)'         ],
+                    [ '\\',                  'Open command prompt with :list'                   ],
+                    [ '>',                   'Narrow by tag (-x)'                               ],
+                    [ '<',                   'Clear list narrowing'                             ],
+                    [ 'ESC-u / M-u',         'Clear search highlighting'                        ],
+                    [ ':',                   'Enter command (list/ls updates display)'          ],
+                    [ ')',                   "Narrow to current todo's project (-p)"            ],
+                    [ '(',                   'Clear project narrowing'                          ],
+                    [ 'h',                   'This help'                                        ],
+                    [ 'q',                   'Quit'                                             ],
+                );
+                my $kw = max(map { length($_->[0]) } @bindings);
+                print "tdone TUI key bindings:\n\n";
+                printf "  %-*s  %s\n", $kw, $_->[0], $_->[1] for @bindings;
+                print "\nPress any key...\n";
                 ReadMode('raw');
                 ReadKey(0);
             }

@@ -305,7 +305,7 @@ sub next_cron_occurrence {
             my @nx = @lt;
             $nx[1] = 0; $nx[2] = 0; $nx[3] = 1; $nx[4]++;
             if ($nx[4] > 11) { $nx[4] = 0; $nx[5]++; }
-            $t = POSIX::mktime(@nx);
+            $t = mktime(@nx);
             next;
         }
         # Check day
@@ -323,7 +323,7 @@ sub next_cron_occurrence {
             # Advance to next midnight
             my @nx = @lt;
             $nx[0] = 0; $nx[1] = 0; $nx[2] = 0; $nx[3]++;
-            $t = POSIX::mktime(@nx);
+            $t = mktime(@nx);
             next;
         }
         # Check hour
@@ -331,7 +331,7 @@ sub next_cron_occurrence {
             # Advance to next hour boundary
             my @nx = @lt;
             $nx[0] = 0; $nx[1] = 0; $nx[2]++;
-            $t = POSIX::mktime(@nx);
+            $t = mktime(@nx);
             next;
         }
         # Check minute
@@ -354,12 +354,17 @@ sub fmt_date {
     return $d;
 }
 
+sub table_title_width {
+    my ($cols) = @_;
+    return max(10, $cols - 95);
+}
+
 sub print_table {
     my @todos = @_;
     my $cols = 80;
     eval { ($cols) = GetTerminalSize() };
     my %by_id = map { $_->{id} => $_ } load_tasks();
-    my $title_w = max(10, $cols - 95);
+    my $title_w = table_title_width($cols);
     printf "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n",
         'id', 'status', 'project', $title_w, 'title',
         'scheduled', 'due', 'pri', 'tags';
@@ -398,63 +403,22 @@ sub task_to_yaml_hash {
     };
 }
 
-sub _yaml_scalar {
-    my ($val) = @_;
-    return '' unless defined $val && $val ne '';
-    # Multiline: use literal block scalar (strip any trailing newline so the
-    # block ends cleanly with a single newline after the last line)
-    if ($val =~ /\n/) {
-        $val =~ s/\n+\z//;   # remove trailing newlines
-        my $out = "|\n";
-        $out .= "  $_\n" for split /\n/, $val;
-        return $out;
-    }
-    # Single-line values that need quoting:
-    # starts with a YAML indicator char, contains ': ', starts with '# ',
-    # contains ' #' (inline comment), or looks like a boolean/null keyword.
-    if ($val =~ /^[\{\[\|>"'%@`\!&\*]/ ||
-        $val =~ /: / || $val =~ /^: / ||
-        $val =~ /^-\s/ ||
-        $val =~ /^#/ ||
-        $val =~ /\s#/ ||
-        $val =~ /\\\n/ ||
-        lc($val) =~ /^(?:true|false|yes|no|null|~)$/) {
-        (my $esc = $val) =~ s/\\/\\\\/g;
-        $esc =~ s/"/\\"/g;
-        return "\"$esc\"";
-    }
-    return $val;
-}
-
-sub task_to_yaml_string {
-    my ($h) = @_;
-    my $out = "---\n";
-    for my $key (qw(title status project scheduled due priority tags blocked_by description)) {
-        my $val = _yaml_scalar($h->{$key});
-        $out .= "$key: $val\n";
-    }
-    return $out;
-}
-
 sub edit_task_yaml {
     my ($t) = @_;
     my $editor = $ENV{VISUAL} || $ENV{EDITOR} || 'vi';
-    my ($fh, $fname) = tempfile(SUFFIX => '.yaml', UNLINK => 0);
-    print $fh task_to_yaml_string(task_to_yaml_hash($t));
-    close $fh;
+    my (undef, $fname) = tempfile(SUFFIX => '.yaml', UNLINK => 0);
+    my $yaml = YAML::Tiny->new(task_to_yaml_hash($t));
+    my $yaml_str = $yaml->write_string
+        or die 'YAML serialization error: ' . YAML::Tiny->errstr . "\n";
+    path($fname)->spew_utf8($yaml_str);
     system($editor, $fname);
-    open my $rfh, '<:encoding(UTF-8)', $fname
-        or die "Cannot read $fname: $!\n";
-    my $content = do { local $/; <$rfh> };
-    close $rfh;
-    unlink $fname;
+    my $content = path($fname)->slurp_utf8;
+    path($fname)->remove;
     my $data = YAML::Tiny->read_string($content)
         or die 'YAML parse error: ' . YAML::Tiny->errstr . "\n";
     my $h = $data->[0] // {};
     for my $f (qw(title status project scheduled due priority tags blocked_by description)) {
-        my $v = $h->{$f} // '';
-        $v =~ s/\n+\z// if $f eq 'description';  # strip trailing newlines from block scalar
-        $t->{$f} = $v;
+        $t->{$f} = $h->{$f} // '';
     }
     return $t;
 }
