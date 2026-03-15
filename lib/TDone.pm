@@ -523,11 +523,11 @@ sub cmd_due {
 
 sub cmd_block {
     my @args  = @_;
-    my ($id_query, $blockers_query) = @args;
-    die "Usage: block <id_query> <blockers_query>\n" unless defined $id_query && defined $blockers_query;
+    my ($id, $blockers_query) = @args;
+    die "Usage: block <id> <query>\n" unless defined $id && $id =~ /^\d+$/ && defined $blockers_query;
     my @todos    = load_todos();
-    my @blocked  = match_todos($id_query, @todos);
-    return print "No todos matching '$id_query'\n" unless @blocked;
+    my @blocked  = grep { ($_->{id} // 0) == $id } @todos;
+    return print "No todo with id '$id'\n" unless @blocked;
     my @blockers = match_todos($blockers_query, @todos);
     return print "No todos matching '$blockers_query'\n" unless @blockers;
     my %blocker_ids = map { $_->{id} => 1 } @blockers;
