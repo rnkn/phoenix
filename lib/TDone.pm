@@ -1,7 +1,7 @@
 package TDone;
 use strict;
 use warnings;
-use parent 'Exporter';
+use Exporter qw(import);
 use POSIX         qw(strftime mktime);
 use File::Temp    qw(tempfile);
 use Path::Tiny;
