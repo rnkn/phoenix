@@ -6,7 +6,6 @@ use POSIX         qw(strftime mktime);
 use File::Temp    qw(tempfile);
 use Path::Tiny;
 use List::Util    qw(max);
-use Getopt::Std   qw(getopts);
 use YAML::Tiny;
 use Term::ReadKey;
 
@@ -169,10 +168,30 @@ sub parse_timespec {
 
 sub parse_opts {
     my ($optstring, $args_ref) = @_;
+    my %takes_value;
+    while ($optstring =~ /([a-zA-Z])(:?)/g) {
+        $takes_value{$1} = ($2 eq ':');
+    }
     my %opts;
-    local @ARGV = @$args_ref;
-    getopts($optstring, \%opts) or die "Invalid option(s)\n";
-    @$args_ref = @ARGV;
+    my @remaining;
+    my $i = 0;
+    while ($i < @$args_ref) {
+        my $arg = $args_ref->[$i];
+        if ($arg =~ /^-([a-zA-Z])$/) {
+            my $flag = $1;
+            die "Unknown option: -$flag\n" unless exists $takes_value{$flag};
+            if ($takes_value{$flag}) {
+                die "Option -$flag requires a value\n" unless $i + 1 < @$args_ref;
+                $opts{$flag} = $args_ref->[++$i];
+            } else {
+                $opts{$flag} = 1;
+            }
+        } else {
+            push @remaining, $arg;
+        }
+        $i++;
+    }
+    @$args_ref = @remaining;
     return %opts;
 }
 
