@@ -1,7 +1,7 @@
 package TDone::TUI;
 use strict;
 use warnings;
-use List::Util qw(max);
+use List::Util qw(max min);
 use Term::ReadKey;
 
 use TDone;
@@ -46,21 +46,82 @@ sub tui_read_key {
 sub tui_prompt {
     my ($rows, $cols, $prompt, $prefill) = @_;
     $prefill //= '';
-    print _goto($rows, 1), CLR_EOL, $prompt, $prefill;
-    ReadMode('normal');
-    my $input = <STDIN>;
-    chomp $input if defined $input;
-    ReadMode('raw');
-    return $prefill . ($input // '');
+
+    # Simple line editor: start with prefill in buffer, cursor at end.
+    # Supports: printable chars, Backspace, Del, Left/Right, Home/End, Enter, Ctrl-C/Ctrl-G.
+    my @buf  = split //, $prefill;
+    my $pos  = scalar @buf;
+
+    my $_redraw = sub {
+        my $line = join('', @buf);
+        print _goto($rows, 1), CLR_EOL, $prompt, $line,
+              _goto($rows, 1 + length($prompt) + $pos);
+    };
+
+    $_redraw->();
+
+    while (1) {
+        my $ch = ReadKey(0);
+        last unless defined $ch;
+        my $ord = ord($ch);
+
+        if ($ord == 13 || $ord == 10) {        # Enter
+            last;
+        } elsif ($ord == 3 || $ord == 7) {     # Ctrl-C / Ctrl-G => cancel
+            return '';
+        } elsif ($ord == 27) {                 # ESC sequence
+            my $c2 = ReadKey(0.15);
+            if (!defined $c2) {
+                return '';                     # bare ESC => cancel
+            } elsif ($c2 eq '[') {
+                my $c3 = ReadKey(0.05) // '';
+                if ($c3 eq 'A') { }            # up — ignore
+                elsif ($c3 eq 'B') { }         # down — ignore
+                elsif ($c3 eq 'C') { $pos++ if $pos < @buf; } # right
+                elsif ($c3 eq 'D') { $pos-- if $pos > 0;    } # left
+                elsif ($c3 =~ /[0-9;]/) {
+                    # consume longer sequences (e.g. Delete = ESC[3~)
+                    my $extra = ReadKey(0.05) // '';
+                    if ($c3 eq '3' && $extra eq '~' && $pos < @buf) {
+                        splice @buf, $pos, 1;  # Delete key
+                    }
+                }
+            }
+            # other ESC sequences — ignore
+        } elsif ($ord == 1) {                  # Ctrl-A => Home
+            $pos = 0;
+        } elsif ($ord == 5) {                  # Ctrl-E => End
+            $pos = scalar @buf;
+        } elsif ($ord == 127 || $ord == 8) {   # Backspace
+            if ($pos > 0) {
+                splice @buf, $pos - 1, 1;
+                $pos--;
+            }
+        } elsif ($ord == 4) {                  # Ctrl-D (forward delete)
+            splice @buf, $pos, 1 if $pos < @buf;
+        } elsif ($ord == 11) {                 # Ctrl-K => kill to end
+            splice @buf, $pos;
+        } elsif ($ord == 21) {                 # Ctrl-U => kill to start
+            splice @buf, 0, $pos;
+            $pos = 0;
+        } elsif ($ord >= 32 && $ord != 127) {  # Printable character
+            splice @buf, $pos, 0, $ch;
+            $pos++;
+        }
+        $_redraw->();
+    }
+
+    print _goto($rows, 1), CLR_EOL;
+    return join('', @buf);
 }
 
 sub tui_draw {
     my ($rows, $cols, $row_map, $cur, $scroll, $search_hl, $tasks_by_id) = @_;
     print CLEAR;
-    my $title_w = max(10, $cols - 85);
+    my $title_w = max(10, $cols - 95);
     printf BOLD . "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n" . RESET,
-        'ID', 'STATUS', 'PROJECT', $title_w, 'TITLE',
-        'SCHEDULED', 'DUE', 'PRI', 'TAGS';
+        'id', 'status', 'project', $title_w, 'title',
+        'scheduled', 'due', 'pri', 'tags';
     print '-' x $cols, "\n";
 
     my $visible = $rows - 2;
@@ -88,24 +149,24 @@ sub tui_draw {
                 (my $ht = $title) =~ s/(\Q$search_hl\E)/YELLOW.BOLD.$1.RESET.($is_cur ? REVERSE : '')/ige;
                 # Pad using the visible length of $title (before ANSI codes were added)
                 my $ht_padded = $ht . (' ' x max(0, $title_w - length($title)));
-                printf "%s%-4s %-9s %-12s %s %-14.14s %-14.14s %-4s %-20s%s%s\n",
+                printf "%s%-4s %-9s %-12s %s %-14.14s %-14.14s %-4s %-30s%s%s\n",
                     $pfx,
                     $t->{id} // '', substr($status, 0, 9),
                     substr($t->{project} // '', 0, 12),
                     $ht_padded,
                     TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
                     substr($t->{priority} // '', 0, 4),
-                    substr($t->{tags} // '', 0, 20),
+                    substr($t->{tags} // '', 0, 30),
                     $star, $sfx;
             } else {
-                printf "%s%-4s %-9s %-12s %-*s %-14.14s %-14.14s %-4s %-20s%s%s\n",
+                printf "%s%-4s %-9s %-12s %-*s %-14.14s %-14.14s %-4s %-30s%s%s\n",
                     $pfx,
                     $t->{id} // '', substr($status, 0, 9),
                     substr($t->{project} // '', 0, 12),
                     $title_w, $title,
                     TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
                     substr($t->{priority} // '', 0, 4),
-                    substr($t->{tags} // '', 0, 20),
+                    substr($t->{tags} // '', 0, 30),
                     $star, $sfx;
             }
         }
@@ -190,6 +251,23 @@ sub cmd_ui {
             elsif ($k eq 'G') { $cur = max(0, scalar(@row_map) - 1); }
             elsif ($k eq "\x0c") { }    # ^L — just repaint
 
+            # ---- scroll half/full screen ----
+            elsif ($k eq 'd' || $k eq "\x04") {          # d / Ctrl-D: half down
+                my $half = max(1, int($visible / 2));
+                $cur = min($#row_map, $cur + $half);
+            }
+            elsif ($k eq 'u' || $k eq "\x15") {          # u / Ctrl-U: half up
+                my $half = max(1, int($visible / 2));
+                $cur = max(0, $cur - $half);
+            }
+            elsif ($k eq ' ' || $k eq "\x16" || $k eq 'f' || $k eq "\x06") {
+                # space / Ctrl-V / f / Ctrl-F: full screen down
+                $cur = min($#row_map, $cur + $visible);
+            }
+            elsif ($k eq 'b' || $k eq "\x02") {          # b / Ctrl-B: full screen up
+                $cur = max(0, $cur - $visible);
+            }
+
             # ESC and meta keys
             elsif ($k eq 'esc') { }     # standalone ESC — ignore
             elsif ($k eq 'meta') {
@@ -197,6 +275,9 @@ sub cmd_ui {
                 if    ($mc eq '<')        { $cur = 0; }
                 elsif ($mc eq '>')        { $cur = max(0, $#row_map); }
                 elsif (lc($mc) eq 'u')    { $search = ''; }
+                elsif ($mc eq 'v' || $mc eq 'V') {   # ESC-v / Meta-v: full screen up
+                    $cur = max(0, $cur - $visible);
+                }
             }
 
             # ---- Enter: expand/collapse description ----
@@ -226,7 +307,7 @@ sub cmd_ui {
             elsif ($k eq 'X') {
                 my $prefill  = 'x ';
                 my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                if (length($cmd_line) > length($prefill)) {
+                if ($cmd_line ne '') {
                     eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                     warn $@ if $@;
                 }
@@ -250,7 +331,7 @@ sub cmd_ui {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "block -i $tid ";
                     my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                    if (length($cmd_line) > length($prefill)) {
+                    if ($cmd_line ne '') {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -300,7 +381,20 @@ sub cmd_ui {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "modify $tid -x ";
                     my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                    if (length($cmd_line) > length($prefill)) {
+                    if ($cmd_line ne '') {
+                        eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                        warn $@ if $@;
+                    }
+                }
+            }
+
+            # ---- -: remove tag via command prompt (modify <id> -X <tag>) ----
+            elsif ($k eq '-') {
+                if (@row_map) {
+                    my $tid     = $row_map[$cur]{todo}{id} // 0;
+                    my $prefill = "modify $tid -X ";
+                    my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                    if ($cmd_line ne '') {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -313,7 +407,7 @@ sub cmd_ui {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "modify $tid -p ";
                     my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                    if (length($cmd_line) > length($prefill)) {
+                    if ($cmd_line ne '') {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -331,6 +425,17 @@ sub cmd_ui {
                         warn $@ if $@;
                         ReadMode('raw');
                     }
+                }
+            }
+
+            # ---- E: immediately edit current todo in $EDITOR (no prompt) ----
+            elsif ($k eq 'E') {
+                if (@row_map) {
+                    my $tid = $row_map[$cur]{todo}{id} // 0;
+                    ReadMode('normal');
+                    eval { TDone::dispatch_command('edit', $tid) };
+                    warn $@ if $@;
+                    ReadMode('raw');
                 }
             }
 
@@ -374,7 +479,7 @@ sub cmd_ui {
             elsif ($k eq '\\') {
                 my $prefill  = 'list ';
                 my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                if (length($cmd_line) > length($prefill)) {
+                if ($cmd_line ne '') {
                     my @parts = split /\s+/, $cmd_line;
                     my $verb  = lc($parts[0] // '');
                     if ($verb eq 'list' || $verb eq 'ls') {
@@ -453,6 +558,10 @@ tdone TUI key bindings:
   g / ESC-<       Move to top
   G / ESC->       Move to bottom
   ^L              Repaint screen
+  d / ^D          Scroll half a screen down
+  u / ^U          Scroll half a screen up
+  SPC / ^V / f / ^F   Scroll a full screen down
+  b / ^B / ESC-v  Scroll a full screen up
   RET             Expand/collapse todo description
   x               Toggle current todo done/incomplete
   X               Prompt to mark a query of todos done
@@ -462,8 +571,10 @@ tdone TUI key bindings:
   S               Set scheduled date (timespec)
   D               Set due date (timespec)
   +               Add tag (modify <id> -x <tag>)
+  -               Remove tag (modify <id> -X <tag>)
   ^               Set project (modify <id> -p <project>)
-  e               Edit todo in $EDITOR
+  e               Edit todo in $EDITOR (via prompt)
+  E               Edit current todo immediately in $EDITOR
   /               Search displayed rows (highlight only)
   n               Next search match
   ? / N           Previous search match (search backward)
