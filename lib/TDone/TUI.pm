@@ -66,7 +66,7 @@ sub tui_draw {
     print BOLD, $hdr, RESET, "\n";
     print '-' x $cols, "\n";
 
-    my $visible = $rows - 2;
+    my $visible = $rows - 3;
     $visible = 1 if $visible < 1;
 
     for my $i ($scroll .. $scroll + $visible - 1) {
@@ -170,7 +170,7 @@ sub cmd_ui {
             $cur = $#row_map  if @row_map && $cur > $#row_map;
 
             # Adjust scroll
-            my $visible = max(1, $rows - 2);
+            my $visible = max(1, $rows - 3);
             $scroll = $cur                    if $cur < $scroll;
             $scroll = $cur - $visible + 1     if $cur >= $scroll + $visible;
             $scroll = 0                       if $scroll < 0;
