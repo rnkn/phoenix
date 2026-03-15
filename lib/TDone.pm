@@ -17,14 +17,15 @@ our $VERSION = '0.1.0';
 
 my @FIELDS = qw(id status project title scheduled due priority blocked_by tags description);
 
-# Column widths – defined once and referenced throughout
-our $W_ID      =  4;
-our $W_STATUS  =  9;
-our $W_PROJECT = 12;
-our $W_SCHED   = 14;
-our $W_DUE     = 14;
-our $W_PRI     =  4;
-our $W_TAGS    = 30;
+use constant {
+    W_ID      =>  4,
+    W_STATUS  =>  9,
+    W_PROJECT => 12,
+    W_SCHED   => 14,
+    W_DUE     => 14,
+    W_PRI     =>  4,
+    W_TAGS    => 30,
+};
 our @TABLE_HEADERS = qw(id status project title scheduled due pri tags);
 
 sub data_file {
@@ -94,13 +95,13 @@ my %MONTH_MAP = (
 # A valid 5-field crontab expression, e.g. "0 0 * * *" or "*/15 6-22 1,15 * 1-5"
 sub is_cron_expr {
     my ($s) = @_;
-    return 0 unless $s;
+    return unless $s;
     return $s =~ /^[\d\*\/,\-]+(?:\s+[\d\*\/,\-]+){4}$/;
 }
 
 sub parse_timespec {
     my ($spec) = @_;
-    return '' unless $spec;
+    return unless $spec;
 
     # Valid 5-field cron expression — store verbatim
     return $spec if is_cron_expr($spec);
@@ -366,12 +367,14 @@ sub fmt_date {
 
 sub table_layout {
     my ($terminal_cols) = @_;
-    my $fixed   = $W_ID + $W_STATUS + $W_PROJECT + $W_SCHED + $W_DUE + $W_PRI + $W_TAGS + 9;
+    my ($id, $sta, $prj, $sch, $due, $pri, $tag) =
+        (W_ID, W_STATUS, W_PROJECT, W_SCHED, W_DUE, W_PRI, W_TAGS);
+    my $fixed   = $id + $sta + $prj + $sch + $due + $pri + $tag + 9;
     my $title_w = max(10, $terminal_cols - $fixed);
-    my $hdr = sprintf "%-${W_ID}s %-${W_STATUS}s %-${W_PROJECT}s %-*s %-${W_SCHED}s %-${W_DUE}s %-${W_PRI}s %s",
+    my $hdr = sprintf "%-${id}s %-${sta}s %-${prj}s %-*s %-${sch}s %-${due}s %-${pri}s %s",
         @TABLE_HEADERS[0,1,2], $title_w, @TABLE_HEADERS[3..7];
-    my $row_fmt = "%-${W_ID}s %-${W_STATUS}s %-${W_PROJECT}s %-*s"
-                . " %-${W_SCHED}.${W_SCHED}s %-${W_DUE}.${W_DUE}s %-${W_PRI}s %-${W_TAGS}s%s\n";
+    my $row_fmt = "%-${id}s %-${sta}s %-${prj}s %-*s"
+                . " %-${sch}.${sch}s %-${due}.${due}s %-${pri}s %-${tag}s%s\n";
     return ($title_w, $hdr, $row_fmt);
 }
 
@@ -387,13 +390,13 @@ sub print_table {
         my $desc_star = $t->{description} ? '*' : ' ';
         printf $row_fmt,
             $t->{id} // '',
-            substr(display_status($t, \%by_id), 0, $W_STATUS),
-            substr($t->{project} // '', 0, $W_PROJECT),
+            substr(display_status($t, \%by_id), 0, W_STATUS),
+            substr($t->{project} // '', 0, W_PROJECT),
             $title_w, substr($t->{title} // '', 0, $title_w),
             fmt_date($t->{scheduled}),
             fmt_date($t->{due}),
-            substr($t->{priority} // '', 0, $W_PRI),
-            substr($t->{tags} // '', 0, $W_TAGS),
+            substr($t->{priority} // '', 0, W_PRI),
+            substr($t->{tags} // '', 0, W_TAGS),
             $desc_star;
     }
 }

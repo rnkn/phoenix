@@ -58,9 +58,9 @@ sub tui_prompt {
 
     ReadMode('restore');
     print _goto($rows, 1), CLR_EOL;
-    my $input = $tui_rl->readline($prompt, $prefill);
+    my $input = $tui_rl->readline($prompt, $prefill) // '';
     ReadMode('raw');
-    return defined $input ? $input : '';
+    return $input;
 }
 
 sub tui_draw {
@@ -69,6 +69,10 @@ sub tui_draw {
     my ($title_w, $hdr) = TDone::table_layout($cols);
     print BOLD, $hdr, RESET, "\n";
     print '-' x $cols, "\n";
+
+    my ($id, $sta, $prj, $sch, $due, $pri, $tag) =
+        (TDone::W_ID, TDone::W_STATUS, TDone::W_PROJECT, TDone::W_SCHED,
+         TDone::W_DUE, TDone::W_PRI, TDone::W_TAGS);
 
     my $visible = $rows - 2;
     $visible = 1 if $visible < 1;
@@ -95,24 +99,24 @@ sub tui_draw {
                 (my $ht = $title) =~ s/(\Q$search_hl\E)/YELLOW.BOLD.$1.RESET.($is_cur ? REVERSE : '')/ige;
                 # Pad using the visible length of $title (before ANSI codes were added)
                 my $ht_padded = $ht . (' ' x max(0, $title_w - length($title)));
-                printf "%s%-${TDone::W_ID}s %-${TDone::W_STATUS}s %-${TDone::W_PROJECT}s %s %-${TDone::W_SCHED}.${TDone::W_SCHED}s %-${TDone::W_DUE}.${TDone::W_DUE}s %-${TDone::W_PRI}s %-${TDone::W_TAGS}s%s%s\n",
+                printf "%s%-${id}s %-${sta}s %-${prj}s %s %-${sch}.${sch}s %-${due}.${due}s %-${pri}s %-${tag}s%s%s\n",
                     $pfx,
-                    $t->{id} // '', substr($status, 0, $TDone::W_STATUS),
-                    substr($t->{project} // '', 0, $TDone::W_PROJECT),
+                    $t->{id} // '', substr($status, 0, $sta),
+                    substr($t->{project} // '', 0, $prj),
                     $ht_padded,
                     TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
-                    substr($t->{priority} // '', 0, $TDone::W_PRI),
-                    substr($t->{tags} // '', 0, $TDone::W_TAGS),
+                    substr($t->{priority} // '', 0, $pri),
+                    substr($t->{tags} // '', 0, $tag),
                     $star, $sfx;
             } else {
-                printf "%s%-${TDone::W_ID}s %-${TDone::W_STATUS}s %-${TDone::W_PROJECT}s %-*s %-${TDone::W_SCHED}.${TDone::W_SCHED}s %-${TDone::W_DUE}.${TDone::W_DUE}s %-${TDone::W_PRI}s %-${TDone::W_TAGS}s%s%s\n",
+                printf "%s%-${id}s %-${sta}s %-${prj}s %-*s %-${sch}.${sch}s %-${due}.${due}s %-${pri}s %-${tag}s%s%s\n",
                     $pfx,
-                    $t->{id} // '', substr($status, 0, $TDone::W_STATUS),
-                    substr($t->{project} // '', 0, $TDone::W_PROJECT),
+                    $t->{id} // '', substr($status, 0, $sta),
+                    substr($t->{project} // '', 0, $prj),
                     $title_w, $title,
                     TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
-                    substr($t->{priority} // '', 0, $TDone::W_PRI),
-                    substr($t->{tags} // '', 0, $TDone::W_TAGS),
+                    substr($t->{priority} // '', 0, $pri),
+                    substr($t->{tags} // '', 0, $tag),
                     $star, $sfx;
             }
         }
