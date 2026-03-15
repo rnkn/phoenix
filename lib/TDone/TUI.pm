@@ -1,8 +1,7 @@
 package TDone::TUI;
 use strict;
 use warnings;
-use utf8;
-use List::Util    qw(max);
+use List::Util qw(max);
 use Term::ReadKey;
 
 use TDone;

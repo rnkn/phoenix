@@ -1,8 +1,7 @@
 package TDone;
 use strict;
 use warnings;
-use utf8;
-use POSIX         qw(strftime mktime);
+use POSIX         qw(strftime);
 use File::Temp    qw(tempfile);
 use Path::Tiny;
 use List::Util    qw(max);
