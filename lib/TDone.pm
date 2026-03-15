@@ -182,7 +182,7 @@ sub parse_opts {
             die "Unknown option: -$flag\n" unless exists $takes_value{$flag};
             if ($takes_value{$flag}) {
                 die "Option -$flag requires a value\n" unless $i + 1 < @$args_ref;
-                $opts{$flag} = $args_ref->[++$i];
+                push @{$opts{$flag}}, $args_ref->[++$i];
             } else {
                 $opts{$flag} = 1;
             }
@@ -193,25 +193,6 @@ sub parse_opts {
     }
     @$args_ref = @remaining;
     return %opts;
-}
-
-# Extract all occurrences of -FLAG VALUE from args, returning the values.
-# Modifies @$args_ref in place (removes the -FLAG VALUE pairs).
-sub collect_flags {
-    my ($flag, $args_ref) = @_;
-    my @values;
-    my @remaining;
-    my $i = 0;
-    while ($i < @$args_ref) {
-        if ($args_ref->[$i] eq "-$flag" && $i + 1 < @$args_ref) {
-            push @values, $args_ref->[++$i];
-        } else {
-            push @remaining, $args_ref->[$i];
-        }
-        $i++;
-    }
-    @$args_ref = @remaining;
-    return @values;
 }
 
 # ============================================================
@@ -483,7 +464,7 @@ sub parse_todo_string {
 sub cmd_add {
     my @args = @_;
     my %opts = parse_opts('et:', \@args);
-    my ($opt_e, $opt_t) = ($opts{e}, $opts{t});
+    my ($opt_e, $opt_t) = ($opts{e}, defined $opts{t} ? $opts{t}[-1] : undef);
     my $str = join(' ', @args);
 
     my %fields = parse_todo_string($str);
@@ -509,7 +490,7 @@ sub cmd_add {
 sub cmd_schedule {
     my @args = @_;
     my %opts = parse_opts('t:', \@args);
-    my $opt_t = $opts{t};
+    my $opt_t = defined $opts{t} ? $opts{t}[-1] : undef;
     my $query = join(' ', @args);
     my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
     my @todos = load_todos();
@@ -526,7 +507,7 @@ sub cmd_schedule {
 sub cmd_due {
     my @args = @_;
     my %opts = parse_opts('t:', \@args);
-    my $opt_t = $opts{t};
+    my $opt_t = defined $opts{t} ? $opts{t}[-1] : undef;
     my $query = join(' ', @args);
     my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
     my @todos = load_todos();
@@ -543,7 +524,7 @@ sub cmd_due {
 sub cmd_block {
     my @args  = @_;
     my %opts  = parse_opts('i:', \@args);
-    my $id    = $opts{i} // die "Usage: block -i <id> <query>\n";
+    my $id    = defined $opts{i} ? $opts{i}[-1] : die "Usage: block -i <id> <query>\n";
     my $query = join(' ', @args);
     $query or die "Usage: block -i <id> <query>\n";
     my @todos   = load_todos();
@@ -565,10 +546,11 @@ sub cmd_block {
 
 sub get_list_todos {
     my @args = @_;
-    my @filter_tags     = collect_flags('x', \@args);
-    my @filter_projects = collect_flags('p', \@args);
-    my %opts = parse_opts('adA:B:', \@args);
-    my ($opt_a, $opt_d, $opt_A, $opt_B) = ($opts{a}, $opts{d}, $opts{A}, $opts{B});
+    my %opts = parse_opts('adA:B:x:p:', \@args);
+    my ($opt_a, $opt_d) = ($opts{a}, $opts{d});
+    my ($opt_A, $opt_B) = (defined $opts{A} ? $opts{A}[-1] : undef, defined $opts{B} ? $opts{B}[-1] : undef);
+    my @filter_tags     = @{$opts{x} // []};
+    my @filter_projects = @{$opts{p} // []};
     my $query = join(' ', @args);
     my @todos = load_todos();
     my @show;
@@ -685,9 +667,10 @@ sub cmd_edit {
 
 sub cmd_modify {
     my @args        = @_;
-    my @new_tags    = collect_flags('x', \@args);
-    my @remove_tags = collect_flags('X', \@args);
-    my @projects    = collect_flags('p', \@args);
+    my %opts        = parse_opts('x:X:p:', \@args);
+    my @new_tags    = @{$opts{x} // []};
+    my @remove_tags = @{$opts{X} // []};
+    my @projects    = @{$opts{p} // []};
     my $project     = @projects ? $projects[-1] : undef;
     die "Usage: modify <query> [-x <tag>]... [-X <tag>]... [-p <project>]\n"
         unless @new_tags || @remove_tags || defined $project;
