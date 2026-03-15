@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use List::Util qw(max min);
 use Term::ReadKey;
-use Term::ReadLine;
+use Term::ReadLine::Tiny;
 
 use TDone qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS);
 
@@ -44,17 +44,15 @@ sub tui_read_key {
     return ($ch);
 }
 
-my $tui_rl;
-
 sub tui_prompt {
-    my ($rows, $cols, $prompt, $prefill) = @_;
+    my ($rows, $prompt, $prefill) = @_;
     $prefill //= '';
 
-    $tui_rl //= Term::ReadLine->new('tdone');
+    my $rl = Term::ReadLine::Tiny->new();
 
     ReadMode('restore');
     print goto_pos($rows, 1), CLR_EOL;
-    my $input = $tui_rl->readline($prompt, $prefill) // '';
+    my $input = $rl->readline($prompt, $prefill) // '';
     ReadMode('raw');
     return $input;
 }
