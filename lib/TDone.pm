@@ -401,11 +401,27 @@ sub task_to_yaml_hash {
 sub _yaml_scalar {
     my ($val) = @_;
     return '' unless defined $val && $val ne '';
-    # Multiline: use literal block scalar
+    # Multiline: use literal block scalar (strip any trailing newline so the
+    # block ends cleanly with a single newline after the last line)
     if ($val =~ /\n/) {
+        $val =~ s/\n+\z//;   # remove trailing newlines
         my $out = "|\n";
         $out .= "  $_\n" for split /\n/, $val;
         return $out;
+    }
+    # Single-line values that need quoting:
+    # starts with a YAML indicator char, contains ': ', starts with '# ',
+    # contains ' #' (inline comment), or looks like a boolean/null keyword.
+    if ($val =~ /^[\{\[\|>"'%@`\!&\*]/ ||
+        $val =~ /: / || $val =~ /^: / ||
+        $val =~ /^-\s/ ||
+        $val =~ /^#/ ||
+        $val =~ /\s#/ ||
+        $val =~ /\\\n/ ||
+        lc($val) =~ /^(?:true|false|yes|no|null|~)$/) {
+        (my $esc = $val) =~ s/\\/\\\\/g;
+        $esc =~ s/"/\\"/g;
+        return "\"$esc\"";
     }
     return $val;
 }
@@ -436,7 +452,9 @@ sub edit_task_yaml {
         or die 'YAML parse error: ' . YAML::Tiny->errstr . "\n";
     my $h = $data->[0] // {};
     for my $f (qw(title status project scheduled due priority tags blocked_by description)) {
-        $t->{$f} = $h->{$f} // '';
+        my $v = $h->{$f} // '';
+        $v =~ s/\n+\z// if $f eq 'description';  # strip trailing newlines from block scalar
+        $t->{$f} = $v;
     }
     return $t;
 }
