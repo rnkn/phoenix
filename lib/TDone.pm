@@ -166,6 +166,25 @@ sub parse_opts {
     return %opts;
 }
 
+# Extract all occurrences of -FLAG VALUE from args, returning the values.
+# Modifies @$args_ref in place (removes the -FLAG VALUE pairs).
+sub collect_flags {
+    my ($flag, $args_ref) = @_;
+    my @values;
+    my @remaining;
+    my $i = 0;
+    while ($i < @$args_ref) {
+        if ($args_ref->[$i] eq "-$flag" && $i + 1 < @$args_ref) {
+            push @values, $args_ref->[++$i];
+        } else {
+            push @remaining, $args_ref->[$i];
+        }
+        $i++;
+    }
+    @$args_ref = @remaining;
+    return @values;
+}
+
 # ============================================================
 # TASK MATCHING AND SORTING
 # ============================================================
@@ -203,8 +222,22 @@ sub sort_todos { sort { todo_sort_key($a) cmp todo_sort_key($b) } @_ }
 # ============================================================
 
 sub display_status {
-    my ($t) = @_;
-    return '[=]' if ($t->{blocked_by} // '') ne '';
+    my ($t, $tasks_by_id) = @_;
+    if (($t->{blocked_by} // '') ne '') {
+        my @ids = grep { /\S/ } split(/\s+/, $t->{blocked_by});
+        if (@ids) {
+            if ($tasks_by_id) {
+                # Blocked if ANY blocking todo is not yet done
+                my $still_blocked = grep {
+                    my $bt = $tasks_by_id->{$_};
+                    !$bt || ($bt->{status} // '') ne 'done'
+                } @ids;
+                return '[=]' if $still_blocked;
+            } else {
+                return '[=]';
+            }
+        }
+    }
     my $s = $t->{status} // 'todo';
     return '[X]' if $s eq 'done';
     return '[~]' if $s eq 'waiting';
@@ -221,6 +254,7 @@ sub print_table {
     my @todos = @_;
     my $cols = 80;
     eval { ($cols) = GetTerminalSize() };
+    my %by_id = map { $_->{id} => $_ } load_tasks();
     my $title_w = max(10, $cols - 85);
     printf "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n",
         'ID', 'STATUS', 'PROJECT', $title_w, 'TITLE',
@@ -230,7 +264,7 @@ sub print_table {
         my $desc_star = ($t->{description} // '') ne '' ? '*' : ' ';
         printf "%-4s %-9s %-12s %-*s %-14.14s %-14.14s %-4s %-20s%s\n",
             $t->{id} // '',
-            substr(display_status($t), 0, 9),
+            substr(display_status($t, \%by_id), 0, 9),
             substr($t->{project} // '', 0, 12),
             $title_w, substr($t->{title} // '', 0, $title_w),
             fmt_date($t->{scheduled}),
@@ -367,23 +401,31 @@ sub cmd_due {
 
 sub cmd_block {
     my @args  = @_;
-    my $id    = shift @args;
-    defined $id or die "Usage: block <id> <query>\n";
+    my %opts  = parse_opts('i:', \@args);
+    my $id    = $opts{i} // die "Usage: block -i <id> <query>\n";
     my $query = join(' ', @args);
-    $query ne '' or die "Usage: block <id> <query>\n";
-    my @todos = load_tasks();
+    $query ne '' or die "Usage: block -i <id> <query>\n";
+    my @todos   = load_tasks();
+    my @blockers = match_todos($query, @todos);
+    return print "No todos matching '$query'\n" unless @blockers;
+    my %blocker_ids = map { $_->{id} => 1 } @blockers;
     my $n = 0;
     for my $t (@todos) {
-        next unless match_todos($query, $t);
-        $t->{blocked_by} = $id;
+        next unless ($t->{id} // 0) == $id;
+        my @existing = grep { /\S/ } split(/\s+/, $t->{blocked_by} // '');
+        my %seen = map { $_ => 1 } @existing;
+        my @new_blockers = grep { !$seen{$_} } sort keys %blocker_ids;
+        $t->{blocked_by} = join(' ', @existing, @new_blockers);
         $n++;
     }
     save_tasks(@todos);
-    printf "Blocked %d todo(s) by todo %s\n", $n, $id;
+    printf "Todo %s is now blocked by %d todo(s)\n", $id, scalar keys %blocker_ids;
 }
 
-sub cmd_list {
+sub get_list_todos {
     my @args = @_;
+    my @filter_tags     = collect_flags('x', \@args);
+    my @filter_projects = collect_flags('p', \@args);
     my %opts = parse_opts('adA:B:', \@args);
     my ($opt_a, $opt_d, $opt_A, $opt_B) = ($opts{a}, $opts{d}, $opts{A}, $opts{B});
     my $query = join(' ', @args);
@@ -416,8 +458,36 @@ sub cmd_list {
             ($due   =~ /^\d{4}/ && $due   le $today && $due   ge $before)
         } @show;
     }
-    @show = match_todos($query, @show) if $query ne '';
-    print_table(sort_todos(@show));
+    # -x <tag> filters (AND): all specified tags must be present
+    for my $tag (@filter_tags) {
+        my $tl = lc $tag;
+        @show = grep {
+            my %todo_tags = map { lc($_) => 1 } split(/\s+/, $_->{tags} // '');
+            exists $todo_tags{$tl}
+        } @show;
+    }
+    # -p <project> filters (OR): todo must belong to one of the specified projects
+    if (@filter_projects) {
+        my %proj_set = map { lc($_) => 1 } @filter_projects;
+        @show = grep { $proj_set{lc($_->{project} // '')} } @show;
+    }
+    # Text query searches title and description only
+    if ($query ne '') {
+        if ($query =~ /^\d+$/) {
+            @show = grep { ($_->{id} // 0) == $query } @show;
+        } else {
+            my $lq = lc $query;
+            @show = grep {
+                index(lc($_->{title}       // ''), $lq) >= 0 ||
+                index(lc($_->{description} // ''), $lq) >= 0
+            } @show;
+        }
+    }
+    return sort_todos(@show);
+}
+
+sub cmd_list {
+    print_table(get_list_todos(@_));
 }
 
 sub cmd_kill {
@@ -430,17 +500,20 @@ sub cmd_kill {
     printf "Deleted %d todo(s)\n", scalar @removed;
 }
 
-sub cmd_complete {
-    my $query = join(' ', @_);
+sub cmd_done {
+    my @args = @_;
+    my %opts = parse_opts('r', \@args);
+    my $query = join(' ', @args);
+    my $new_status = $opts{r} ? 'todo' : 'done';
     my @todos = load_tasks();
     my $n = 0;
     for my $t (@todos) {
         next unless match_todos($query, $t);
-        $t->{status} = 'done';
+        $t->{status} = $new_status;
         $n++;
     }
     save_tasks(@todos);
-    printf "Marked %d todo(s) done\n", $n;
+    printf $opts{r} ? "Reopened %d todo(s)\n" : "Marked %d todo(s) done\n", $n;
 }
 
 sub cmd_waiting {
@@ -469,23 +542,29 @@ sub cmd_edit {
     printf "Edited %d todo(s)\n", $n;
 }
 
-sub cmd_tag {
-    my @args = @_;
-    my %opts = parse_opts('x:', \@args);
-    my $tag   = $opts{x} // die "Usage: tag -x <tagname> [query]\n";
+sub cmd_modify {
+    my @args     = @_;
+    my @new_tags = collect_flags('x', \@args);
+    my @projects = collect_flags('p', \@args);
+    my $project  = @projects ? $projects[-1] : undef;
+    die "Usage: modify <query> [-x <tag>]... [-p <project>]\n"
+        unless @new_tags || defined $project;
     my $query = join(' ', @args);
     my @todos = load_tasks();
     my $n = 0;
     for my $t (@todos) {
         next unless match_todos($query, $t);
-        my @existing = split(/\s+/, $t->{tags} // '');
-        unless (grep { $_ eq $tag } @existing) {
-            $t->{tags} = join(' ', @existing, $tag);
-            $n++;
+        for my $tag (@new_tags) {
+            my @existing = split(/\s+/, $t->{tags} // '');
+            unless (grep { $_ eq $tag } @existing) {
+                $t->{tags} = join(' ', @existing, $tag);
+            }
         }
+        $t->{project} = $project if defined $project;
+        $n++;
     }
     save_tasks(@todos);
-    printf "Tagged %d todo(s) with +%s\n", $n, $tag;
+    printf "Modified %d todo(s)\n", $n;
 }
 
 # ============================================================
@@ -500,10 +579,10 @@ our %CMD = (
     list     => \&cmd_list,
     ls       => \&cmd_list,     # alias — excluded from prefix matching
     kill     => \&cmd_kill,
-    complete => \&cmd_complete,
+    x        => \&cmd_done,
     waiting  => \&cmd_waiting,
     edit     => \&cmd_edit,
-    tag      => \&cmd_tag,
+    modify   => \&cmd_modify,
 );
 
 # Commands that are pure aliases; they match exactly but are not used for

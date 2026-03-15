@@ -45,17 +45,18 @@ sub tui_read_key {
 }
 
 sub tui_prompt {
-    my ($rows, $cols, $prompt) = @_;
-    print _goto($rows, 1), CLR_EOL, $prompt;
+    my ($rows, $cols, $prompt, $prefill) = @_;
+    $prefill //= '';
+    print _goto($rows, 1), CLR_EOL, $prompt, $prefill;
     ReadMode('normal');
     my $input = <STDIN>;
     chomp $input if defined $input;
     ReadMode('raw');
-    return $input // '';
+    return $prefill . ($input // '');
 }
 
 sub tui_draw {
-    my ($rows, $cols, $disp, $row_map, $cur, $scroll, $search_hl, $narrow_project, $narrow_tags, $narrow_search) = @_;
+    my ($rows, $cols, $row_map, $cur, $scroll, $search_hl, $tasks_by_id) = @_;
     print CLEAR;
     my $title_w = max(10, $cols - 85);
     printf BOLD . "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n" . RESET,
@@ -63,7 +64,7 @@ sub tui_draw {
         'SCHEDULED', 'DUE', 'PRI', 'TAGS';
     print '-' x $cols, "\n";
 
-    my $visible = $rows - 3;
+    my $visible = $rows - 2;
     $visible = 1 if $visible < 1;
 
     for my $i ($scroll .. $scroll + $visible - 1) {
@@ -79,7 +80,7 @@ sub tui_draw {
             $desc =~ s/\n/ | /g;
             printf "%s    %-*s%s\n", $pfx, $cols - 5, substr($desc, 0, $cols - 5), $sfx;
         } else {
-            my $status = TDone::display_status($t);
+            my $status = TDone::display_status($t, $tasks_by_id);
             my $star   = ($t->{description} // '') ne '' ? '*' : ' ';
             my $title  = substr($t->{title} // '', 0, $title_w);
 
@@ -110,31 +111,6 @@ sub tui_draw {
             }
         }
     }
-
-    # Status bar
-    my @status_parts;
-    push @status_parts, "project:$narrow_project"    if $narrow_project ne '';
-    push @status_parts, 'tag:' . join('+', @$narrow_tags) if @$narrow_tags;
-    push @status_parts, "narrow:$narrow_search"      if $narrow_search ne '';
-    push @status_parts, "search:$search_hl"          if $search_hl ne '';
-    my $filters = @status_parts ? '  [' . join(' ', @status_parts) . ']' : '';
-    my $info = sprintf 'Todos: %d  Row: %d/%d%s  q:quit  h:help',
-        scalar @$disp,
-        (@$row_map ? $cur + 1 : 0), scalar @$row_map,
-        $filters;
-    print _goto($rows, 1), CLR_EOL, REVERSE,
-          sprintf("%-*s", $cols, substr($info, 0, $cols)), RESET;
-}
-
-sub tui_update_todo {
-    my ($id, %changes) = @_;
-    my @all = TDone::load_tasks();
-    for my $t (@all) {
-        if (($t->{id} // 0) == $id) {
-            $t->{$_} = $changes{$_} for keys %changes;
-        }
-    }
-    TDone::save_tasks(@all);
 }
 
 # Return indices into @$row_map that match the search term
@@ -147,9 +123,8 @@ sub _search_indices {
         my $rm = $row_map->[$i];
         next if $rm->{type} eq 'desc';
         my $t = $rm->{todo};
-        if (index(lc($t->{title}   // ''), $sl) >= 0 ||
-            index(lc($t->{project} // ''), $sl) >= 0 ||
-            index(lc($t->{tags}    // ''), $sl) >= 0) {
+        if (index(lc($t->{title}       // ''), $sl) >= 0 ||
+            index(lc($t->{description} // ''), $sl) >= 0) {
             push @matches, $i;
         }
     }
@@ -161,9 +136,7 @@ sub cmd_ui {
     my $scroll         = 0;
     my %expanded;
     my $search         = '';   # /  — highlight only, n/N navigation
-    my $narrow_search  = '';   # \  — narrows display
-    my $narrow_project = '';   # )  — narrows to project
-    my @narrow_tags    = ();   # >  — narrows by tag (AND)
+    my @list_args      = ();   # list command args for filtering/narrowing
 
     ReadMode('raw');
     local $SIG{TERM} = sub { ReadMode('restore'); exit 0 };
@@ -176,27 +149,9 @@ sub cmd_ui {
             my ($cols, $rows) = GetTerminalSize();
             $cols //= 80; $rows //= 24;
 
-            my @all  = TDone::load_tasks();
-            my @disp = @all;
-            @disp = grep { ($_->{project} // '') eq $narrow_project } @disp
-                if $narrow_project ne '';
-            if (@narrow_tags) {
-                for my $tag (@narrow_tags) {
-                    my $tl = lc $tag;
-                    @disp = grep {
-                        grep { lc($_) eq $tl } split(/\s+/, $_->{tags} // '')
-                    } @disp;
-                }
-            }
-            if ($narrow_search ne '') {
-                my $sl = lc $narrow_search;
-                @disp = grep {
-                    index(lc($_->{title}   // ''), $sl) >= 0 ||
-                    index(lc($_->{project} // ''), $sl) >= 0 ||
-                    index(lc($_->{tags}    // ''), $sl) >= 0
-                } @disp;
-            }
-            @disp = TDone::sort_todos(@disp);
+            my @all_tasks   = TDone::load_tasks();
+            my %tasks_by_id = map { $_->{id} => $_ } @all_tasks;
+            my @disp = TDone::get_list_todos(@list_args);
 
             # Build row map (todo rows + optional expanded description rows)
             my @row_map;
@@ -213,13 +168,13 @@ sub cmd_ui {
             $cur = $#row_map  if @row_map && $cur > $#row_map;
 
             # Adjust scroll
-            my $visible = max(1, $rows - 3);
+            my $visible = max(1, $rows - 2);
             $scroll = $cur                    if $cur < $scroll;
             $scroll = $cur - $visible + 1     if $cur >= $scroll + $visible;
             $scroll = 0                       if $scroll < 0;
 
-            tui_draw($rows, $cols, \@disp, \@row_map, $cur, $scroll,
-                     $search, $narrow_project, \@narrow_tags, $narrow_search);
+            tui_draw($rows, $cols, \@row_map, $cur, $scroll,
+                     $search, \%tasks_by_id);
 
             my @key = tui_read_key();
             my $k   = $key[0] // '';
@@ -254,101 +209,129 @@ sub cmd_ui {
                 }
             }
 
-            # ---- X/x: toggle done/todo ----
-            elsif ($k eq 'X' || $k eq 'x') {
+            # ---- x: immediately toggle done state of current todo ----
+            elsif ($k eq 'x') {
                 if (@row_map) {
-                    my $tid = $row_map[$cur]{todo}{id} // 0;
-                    my @all2 = TDone::load_tasks();
-                    for my $t (@all2) {
-                        if (($t->{id} // 0) == $tid) {
-                            $t->{status} = ($t->{status}//'') eq 'done' ? 'todo' : 'done';
-                        }
+                    my $tid    = $row_map[$cur]{todo}{id} // 0;
+                    my $status = $row_map[$cur]{todo}{status} // '';
+                    if ($status eq 'done') {
+                        eval { TDone::dispatch_command('x', '-r', $tid) };
+                    } else {
+                        eval { TDone::dispatch_command('x', $tid) };
                     }
-                    TDone::save_tasks(@all2);
+                    warn $@ if $@;
                 }
             }
 
-            # ---- W: mark waiting ----
+            # ---- X: open prompt to mark a query of todos done ----
+            elsif ($k eq 'X') {
+                my $prefill  = 'x ';
+                my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                if (length($cmd_line) > length($prefill)) {
+                    eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                    warn $@ if $@;
+                }
+            }
+
+            # ---- W: mark waiting via command prompt ----
             elsif ($k eq 'W') {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    tui_update_todo($tid, status => 'waiting');
+                    my $cmd_line = tui_prompt($rows, $cols, ':', "waiting $tid");
+                    if ($cmd_line ne '') {
+                        eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                        warn $@ if $@;
+                    }
                 }
             }
 
-            # ---- B: set blocked_by ----
+            # ---- B: block current todo by a query of todos ----
             elsif ($k eq 'B') {
-                my $bid = tui_prompt($rows, $cols, 'Block by todo ID: ');
-                if ($bid =~ /^\d+$/ && @row_map) {
-                    my $tid = $row_map[$cur]{todo}{id} // 0;
-                    tui_update_todo($tid, blocked_by => $bid);
+                if (@row_map) {
+                    my $tid     = $row_map[$cur]{todo}{id} // 0;
+                    my $prefill = "block -i $tid ";
+                    my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                    if (length($cmd_line) > length($prefill)) {
+                        eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                        warn $@ if $@;
+                    }
                 }
             }
 
-            # ---- S: set scheduled date ----
+            # ---- S: set scheduled date via command prompt ----
             elsif ($k eq 'S') {
-                my $ds = tui_prompt($rows, $cols, 'Schedule (timespec): ');
-                if ($ds ne '' && @row_map) {
+                if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    tui_update_todo($tid, scheduled => TDone::parse_timespec($ds));
+                    my $cmd_line = tui_prompt($rows, $cols, ':', "schedule $tid -t ");
+                    if ($cmd_line ne '') {
+                        eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                        warn $@ if $@;
+                    }
                 }
             }
 
-            # ---- D: set due date ----
+            # ---- D: set due date via command prompt ----
             elsif ($k eq 'D') {
-                my $ds = tui_prompt($rows, $cols, 'Due (timespec): ');
-                if ($ds ne '' && @row_map) {
+                if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    tui_update_todo($tid, due => TDone::parse_timespec($ds));
+                    my $cmd_line = tui_prompt($rows, $cols, ':', "due $tid -t ");
+                    if ($cmd_line ne '') {
+                        eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                        warn $@ if $@;
+                    }
                 }
             }
 
-            # ---- K: kill (delete) current todo ----
+            # ---- K: kill (delete) current todo via command prompt ----
             elsif ($k eq 'K') {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    my @all2 = TDone::load_tasks();
-                    TDone::save_tasks(grep { ($_->{id} // 0) != $tid } @all2);
-                    $cur-- if $cur > 0 && $cur >= $#row_map;
-                }
-            }
-
-            # ---- +: add tags ----
-            elsif ($k eq '+') {
-                my $tags = tui_prompt($rows, $cols, 'Add tags: ');
-                if ($tags ne '' && @row_map) {
-                    my $tid = $row_map[$cur]{todo}{id} // 0;
-                    my @all2 = TDone::load_tasks();
-                    for my $t (@all2) {
-                        if (($t->{id} // 0) == $tid) {
-                            $t->{tags} = join(' ', grep { $_ ne '' }
-                                split(/\s+/, $t->{tags} // ''), split(/\s+/, $tags));
-                        }
+                    my $cmd_line = tui_prompt($rows, $cols, ':', "kill $tid");
+                    if ($cmd_line ne '') {
+                        eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                        warn $@ if $@;
+                        $cur-- if $cur > 0 && $cur >= $#row_map;
                     }
-                    TDone::save_tasks(@all2);
                 }
             }
 
-            # ---- ^: set project ----
-            elsif ($k eq '^') {
-                my $proj = tui_prompt($rows, $cols, 'Set project: ');
+            # ---- +: add tag via command prompt (modify <id> -x <tag>) ----
+            elsif ($k eq '+') {
                 if (@row_map) {
-                    my $tid = $row_map[$cur]{todo}{id} // 0;
-                    tui_update_todo($tid, project => $proj);
+                    my $tid     = $row_map[$cur]{todo}{id} // 0;
+                    my $prefill = "modify $tid -x ";
+                    my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                    if (length($cmd_line) > length($prefill)) {
+                        eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                        warn $@ if $@;
+                    }
                 }
             }
 
-            # ---- e: edit in $EDITOR ----
+            # ---- ^: set project via command prompt (modify <id> -p <project>) ----
+            elsif ($k eq '^') {
+                if (@row_map) {
+                    my $tid     = $row_map[$cur]{todo}{id} // 0;
+                    my $prefill = "modify $tid -p ";
+                    my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                    if (length($cmd_line) > length($prefill)) {
+                        eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                        warn $@ if $@;
+                    }
+                }
+            }
+
+            # ---- e: edit in $EDITOR via command prompt ----
             elsif ($k eq 'e') {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
-                    ReadMode('normal');
-                    my @all2 = TDone::load_tasks();
-                    for my $t (@all2) {
-                        TDone::edit_task_yaml($t) if ($t->{id} // 0) == $tid;
+                    my $cmd_line = tui_prompt($rows, $cols, ':', "edit $tid");
+                    if ($cmd_line ne '') {
+                        ReadMode('normal');
+                        eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+                        warn $@ if $@;
+                        ReadMode('raw');
                     }
-                    TDone::save_tasks(@all2);
-                    ReadMode('raw');
                 }
             }
 
@@ -388,27 +371,34 @@ sub cmd_ui {
                 }
             }
 
-            # ---- \: search-based narrowing (old / behaviour) ----
+            # ---- \: open command prompt pre-filled with :list ----
             elsif ($k eq '\\') {
-                $narrow_search = tui_prompt($rows, $cols, '\\');
-                $cur    = 0;
-                $scroll = 0;
+                my $prefill  = 'list ';
+                my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
+                if (length($cmd_line) > length($prefill)) {
+                    my @parts = split /\s+/, $cmd_line;
+                    my $verb  = lc($parts[0] // '');
+                    if ($verb eq 'list' || $verb eq 'ls') {
+                        @list_args = @parts[1 .. $#parts];
+                        $cur    = 0;
+                        $scroll = 0;
+                    }
+                }
             }
 
-            # ---- >: narrow by tag (AND) ----
+            # ---- >: narrow by tag (-x flag) ----
             elsif ($k eq '>') {
                 my $tag = tui_prompt($rows, $cols, 'Narrow by tag: ');
                 if ($tag ne '') {
-                    push @narrow_tags, $tag;
+                    push @list_args, '-x', $tag;
                     $cur    = 0;
                     $scroll = 0;
                 }
             }
 
-            # ---- <: clear tag / search narrowing ----
+            # ---- <: clear list narrowing ----
             elsif ($k eq '<') {
-                @narrow_tags   = ();
-                $narrow_search = '';
+                @list_args = ();
                 $cur    = 0;
                 $scroll = 0;
             }
@@ -420,11 +410,14 @@ sub cmd_ui {
                     my @parts = split /\s+/, $cmd_line;
                     my $verb  = lc($parts[0] // '');
                     if ($verb eq 'list' || $verb eq 'ls') {
-                        # Apply list filter as narrow_search so the UI updates
-                        my @fargs = @parts[1 .. $#parts];
-                        $narrow_search = join(' ', grep { !/^-/ } @fargs);
+                        @list_args = @parts[1 .. $#parts];
                         $cur    = 0;
                         $scroll = 0;
+                    } elsif ($verb eq 'edit') {
+                        ReadMode('normal');
+                        eval { TDone::dispatch_command(@parts) };
+                        warn $@ if $@;
+                        ReadMode('raw');
                     } else {
                         eval { TDone::dispatch_command(@parts) };
                         warn $@ if $@;
@@ -432,10 +425,11 @@ sub cmd_ui {
                 }
             }
 
-            # ---- ): narrow to current todo's project ----
+            # ---- ): narrow to current todo's project (-p flag) ----
             elsif ($k eq ')') {
                 if (@row_map) {
-                    $narrow_project = $row_map[$cur]{todo}{project} // '';
+                    my $proj = $row_map[$cur]{todo}{project} // '';
+                    @list_args = ($proj ne '' ? ('-p', $proj) : ());
                     $cur    = 0;
                     $scroll = 0;
                 }
@@ -443,7 +437,7 @@ sub cmd_ui {
 
             # ---- (: clear project narrowing ----
             elsif ($k eq '(') {
-                $narrow_project = '';
+                @list_args = ();
                 $cur    = 0;
                 $scroll = 0;
             }
@@ -461,24 +455,25 @@ tdone TUI key bindings:
   G / ESC->       Move to bottom
   ^L              Repaint screen
   RET             Expand/collapse todo description
-  X / x           Toggle todo done/incomplete
+  x               Toggle current todo done/incomplete
+  X               Prompt to mark a query of todos done
   W               Mark todo waiting
-  B               Prompt for blocking todo ID
+  B               Prompt to block current todo by a query of todos
   K               Kill (delete) current todo
   S               Set scheduled date (timespec)
   D               Set due date (timespec)
-  +               Add tags
-  ^               Set project
+  +               Add tag (modify <id> -x <tag>)
+  ^               Set project (modify <id> -p <project>)
   e               Edit todo in $EDITOR
   /               Search displayed rows (highlight only)
   n               Next search match
   ? / N           Previous search match (search backward)
-  \               Narrow display by search term
-  >               Narrow by tag (AND; repeat to add more)
-  <               Clear tag/search narrowing
+  \               Open command prompt with :list
+  >               Narrow by tag (-x)
+  <               Clear list narrowing
   ESC-u / M-u     Clear search highlighting
-  :               Enter command (list <q> updates display)
-  )               Narrow to current todo's project
+  :               Enter command (list/ls updates display)
+  )               Narrow to current todo's project (-p)
   (               Clear project narrowing
   h               This help
   q               Quit
