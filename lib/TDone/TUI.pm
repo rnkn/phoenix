@@ -64,12 +64,10 @@ sub tui_prompt {
 }
 
 sub tui_draw {
-    my ($rows, $cols, $row_map, $cur, $scroll, $search_hl, $tasks_by_id) = @_;
+    my ($rows, $cols, $row_map, $cur, $scroll, $search_hl, $todos_by_id) = @_;
     print CLEAR;
-    my $title_w = TDone::table_title_width($cols);
-    printf BOLD . "%-4s %-9s %-12s %-*s %-14s %-14s %-4s %s\n" . RESET,
-        'id', 'status', 'project', $title_w, 'title',
-        'scheduled', 'due', 'pri', 'tags';
+    my ($title_w, $hdr) = TDone::table_layout($cols);
+    print BOLD, $hdr, RESET, "\n";
     print '-' x $cols, "\n";
 
     my $visible = $rows - 2;
@@ -88,33 +86,33 @@ sub tui_draw {
             $desc =~ s/\n/ | /g;
             printf "%s    %-*s%s\n", $pfx, $cols - 5, substr($desc, 0, $cols - 5), $sfx;
         } else {
-            my $status = TDone::display_status($t, $tasks_by_id);
-            my $star   = ($t->{description} // '') ne '' ? '*' : ' ';
+            my $status = TDone::display_status($t, $todos_by_id);
+            my $star   = $t->{description} ? '*' : ' ';
             my $title  = substr($t->{title} // '', 0, $title_w);
 
             # Highlight search match in title
-            if ($search_hl ne '' && $title =~ /\Q$search_hl\E/i) {
+            if ($search_hl && $title =~ /\Q$search_hl\E/i) {
                 (my $ht = $title) =~ s/(\Q$search_hl\E)/YELLOW.BOLD.$1.RESET.($is_cur ? REVERSE : '')/ige;
                 # Pad using the visible length of $title (before ANSI codes were added)
                 my $ht_padded = $ht . (' ' x max(0, $title_w - length($title)));
-                printf "%s%-4s %-9s %-12s %s %-14.14s %-14.14s %-4s %-30s%s%s\n",
+                printf "%s%-${TDone::W_ID}s %-${TDone::W_STATUS}s %-${TDone::W_PROJECT}s %s %-${TDone::W_SCHED}.${TDone::W_SCHED}s %-${TDone::W_DUE}.${TDone::W_DUE}s %-${TDone::W_PRI}s %-${TDone::W_TAGS}s%s%s\n",
                     $pfx,
-                    $t->{id} // '', substr($status, 0, 9),
-                    substr($t->{project} // '', 0, 12),
+                    $t->{id} // '', substr($status, 0, $TDone::W_STATUS),
+                    substr($t->{project} // '', 0, $TDone::W_PROJECT),
                     $ht_padded,
                     TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
-                    substr($t->{priority} // '', 0, 4),
-                    substr($t->{tags} // '', 0, 30),
+                    substr($t->{priority} // '', 0, $TDone::W_PRI),
+                    substr($t->{tags} // '', 0, $TDone::W_TAGS),
                     $star, $sfx;
             } else {
-                printf "%s%-4s %-9s %-12s %-*s %-14.14s %-14.14s %-4s %-30s%s%s\n",
+                printf "%s%-${TDone::W_ID}s %-${TDone::W_STATUS}s %-${TDone::W_PROJECT}s %-*s %-${TDone::W_SCHED}.${TDone::W_SCHED}s %-${TDone::W_DUE}.${TDone::W_DUE}s %-${TDone::W_PRI}s %-${TDone::W_TAGS}s%s%s\n",
                     $pfx,
-                    $t->{id} // '', substr($status, 0, 9),
-                    substr($t->{project} // '', 0, 12),
+                    $t->{id} // '', substr($status, 0, $TDone::W_STATUS),
+                    substr($t->{project} // '', 0, $TDone::W_PROJECT),
                     $title_w, $title,
                     TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
-                    substr($t->{priority} // '', 0, 4),
-                    substr($t->{tags} // '', 0, 30),
+                    substr($t->{priority} // '', 0, $TDone::W_PRI),
+                    substr($t->{tags} // '', 0, $TDone::W_TAGS),
                     $star, $sfx;
             }
         }
@@ -124,7 +122,7 @@ sub tui_draw {
 # Return indices into @$row_map that match the search term
 sub _search_indices {
     my ($row_map, $search) = @_;
-    return () unless $search ne '';
+    return () unless $search;
     my $sl = lc $search;
     my @matches;
     for my $i (0 .. $#$row_map) {
@@ -157,15 +155,15 @@ sub cmd_ui {
             my ($cols, $rows) = GetTerminalSize();
             $cols //= 80; $rows //= 24;
 
-            my @all_tasks   = TDone::load_tasks();
-            my %tasks_by_id = map { $_->{id} => $_ } @all_tasks;
+            my @all_todos   = TDone::load_todos();
+            my %todos_by_id = map { $_->{id} => $_ } @all_todos;
             my @disp = TDone::get_list_todos(@list_args);
 
             # Build row map (todo rows + optional expanded description rows)
             my @row_map;
             for my $t (@disp) {
                 push @row_map, { todo => $t, type => 'todo' };
-                if ($expanded{$t->{id} // 0} && ($t->{description} // '') ne '') {
+                if ($expanded{$t->{id} // 0} && $t->{description}) {
                     push @row_map, { todo => $t, type => 'desc' };
                 }
             }
@@ -182,7 +180,7 @@ sub cmd_ui {
             $scroll = 0                       if $scroll < 0;
 
             tui_draw($rows, $cols, \@row_map, $cur, $scroll,
-                     $search, \%tasks_by_id);
+                     $search, \%todos_by_id);
 
             my @key = tui_read_key();
             my $k   = $key[0] // '';
@@ -255,7 +253,7 @@ sub cmd_ui {
             elsif ($k eq 'X') {
                 my $prefill  = 'x ';
                 my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                if ($cmd_line ne '') {
+                if ($cmd_line) {
                     eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                     warn $@ if $@;
                 }
@@ -266,7 +264,7 @@ sub cmd_ui {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
                     my $cmd_line = tui_prompt($rows, $cols, ':', "waiting $tid");
-                    if ($cmd_line ne '') {
+                    if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -279,7 +277,7 @@ sub cmd_ui {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "block -i $tid ";
                     my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                    if ($cmd_line ne '') {
+                    if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -291,7 +289,7 @@ sub cmd_ui {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
                     my $cmd_line = tui_prompt($rows, $cols, ':', "schedule $tid -t ");
-                    if ($cmd_line ne '') {
+                    if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -303,7 +301,7 @@ sub cmd_ui {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
                     my $cmd_line = tui_prompt($rows, $cols, ':', "due $tid -t ");
-                    if ($cmd_line ne '') {
+                    if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -315,7 +313,7 @@ sub cmd_ui {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
                     my $cmd_line = tui_prompt($rows, $cols, ':', "kill $tid");
-                    if ($cmd_line ne '') {
+                    if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                         $cur-- if $cur > 0 && $cur >= $#row_map;
@@ -329,7 +327,7 @@ sub cmd_ui {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "modify $tid -x ";
                     my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                    if ($cmd_line ne '') {
+                    if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -342,7 +340,7 @@ sub cmd_ui {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "modify $tid -X ";
                     my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                    if ($cmd_line ne '') {
+                    if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -355,7 +353,7 @@ sub cmd_ui {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
                     my $prefill = "modify $tid -p ";
                     my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                    if ($cmd_line ne '') {
+                    if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
                     }
@@ -367,7 +365,7 @@ sub cmd_ui {
                 if (@row_map) {
                     my $tid = $row_map[$cur]{todo}{id} // 0;
                     my $cmd_line = tui_prompt($rows, $cols, ':', "edit $tid");
-                    if ($cmd_line ne '') {
+                    if ($cmd_line) {
                         ReadMode('normal');
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                         warn $@ if $@;
@@ -387,10 +385,10 @@ sub cmd_ui {
                 }
             }
 
-            # ---- A: add a new task via command prompt ----
+            # ---- A: add a new todo via command prompt ----
             elsif ($k eq 'A') {
                 my $cmd_line = tui_prompt($rows, $cols, ':', 'add ');
-                if ($cmd_line ne '') {
+                if ($cmd_line) {
                     eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
                     warn $@ if $@;
                 }
@@ -400,7 +398,7 @@ sub cmd_ui {
             elsif ($k eq '/') {
                 $search = tui_prompt($rows, $cols, '/');
                 # Jump to first match
-                if ($search ne '') {
+                if ($search) {
                     my @matches = _search_indices(\@row_map, $search);
                     $cur = $matches[0] if @matches;
                 } else {
@@ -410,7 +408,7 @@ sub cmd_ui {
 
             # ---- n: next search match ----
             elsif ($k eq 'n') {
-                if ($search ne '') {
+                if ($search) {
                     my @matches = _search_indices(\@row_map, $search);
                     if (@matches) {
                         my ($next) = grep { $_ > $cur } @matches;
@@ -422,7 +420,7 @@ sub cmd_ui {
 
             # ---- ? / N: previous search match (search backward) ----
             elsif ($k eq '?' || $k eq 'N') {
-                if ($search ne '') {
+                if ($search) {
                     my @matches = _search_indices(\@row_map, $search);
                     if (@matches) {
                         my ($prev) = reverse grep { $_ < $cur } @matches;
@@ -436,7 +434,7 @@ sub cmd_ui {
             elsif ($k eq '\\') {
                 my $prefill  = 'list ';
                 my $cmd_line = tui_prompt($rows, $cols, ':', $prefill);
-                if ($cmd_line ne '') {
+                if ($cmd_line) {
                     my @parts = split /\s+/, $cmd_line;
                     my $verb  = lc($parts[0] // '');
                     if ($verb eq 'list' || $verb eq 'ls') {
@@ -450,7 +448,7 @@ sub cmd_ui {
             # ---- >: narrow by tag (-x flag) ----
             elsif ($k eq '>') {
                 my $tag = tui_prompt($rows, $cols, 'Narrow by tag: ');
-                if ($tag ne '') {
+                if ($tag) {
                     push @list_args, '-x', $tag;
                     $cur    = 0;
                     $scroll = 0;
@@ -467,7 +465,7 @@ sub cmd_ui {
             # ---- :: command prompt ----
             elsif ($k eq ':') {
                 my $cmd_line = tui_prompt($rows, $cols, ':');
-                if ($cmd_line ne '') {
+                if ($cmd_line) {
                     my @parts = split /\s+/, $cmd_line;
                     my $verb  = lc($parts[0] // '');
                     if ($verb eq 'list' || $verb eq 'ls') {
@@ -490,7 +488,7 @@ sub cmd_ui {
             elsif ($k eq ')') {
                 if (@row_map) {
                     my $proj = $row_map[$cur]{todo}{project} // '';
-                    @list_args = ($proj ne '' ? ('-p', $proj) : ());
+                    @list_args = ($proj ? ('-p', $proj) : ());
                     $cur    = 0;
                     $scroll = 0;
                 }
