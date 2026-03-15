@@ -6,5 +6,4 @@ use lib "$FindBin::Bin/lib";
 use TDone;
 use TDone::TUI;
 
-eval { TDone::TUI::cmd_ui(@ARGV) };
-if ($@) { chomp(my $err = $@); die "tdone_ui: $err\n" }
+TDone::TUI::cmd_ui(@ARGV);
