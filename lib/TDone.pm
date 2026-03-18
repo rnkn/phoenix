@@ -20,13 +20,13 @@ our @EXPORT_OK = qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @T
 my @FIELDS = qw(id status project title scheduled due priority blocked_by tags description);
 
 our $W_ID      =  4;
-our $W_STATUS  =  9;
-our $W_PROJECT = 12;
-our $W_SCHED   = 14;
-our $W_DUE     = 14;
+our $W_STATUS  =  4;
+our $W_PROJECT = 14;
+our $W_SCHED   = 12;
+our $W_DUE     = 12;
 our $W_PRI     =  4;
 our $W_TAGS    = 30;
-our @TABLE_HEADERS = qw(id status project title scheduled due pri tags);
+our @TABLE_HEADERS = ('id', '[ ]', 'project', 'title', 'scheduled', 'due', '!!!', 'tags');
 
 sub data_file {
     return $ENV{TDONE_FILE} if $ENV{TDONE_FILE};
