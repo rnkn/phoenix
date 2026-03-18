@@ -487,8 +487,8 @@ sub cmd_add {
 	if ($fields{title} =~ s/(?:\s+|^)(!!!|!!|!)(?:\s+|$)/ /) {
 		my $bang = $1;
 		$priority = length($bang);
-		$fields{title} = join(' ', split(/\s+/, $fields{title}));
-		chomp($fields{title});
+		$fields{title} =~ s/\s+/ /g;
+		$fields{title} =~ s/^\s+|\s+$//g;
 	}
 
 	my @todos  = load_todos();
@@ -582,7 +582,9 @@ sub get_list_todos {
 		my $lower;
 		if (defined $opt_A) {
 			if ($opt_A =~ /^\d+$/) {
-				$upper = strftime('%Y-%m-%d', localtime(time + (($opt_A - 1) * 86400)));
+				# -A 1 means today (0 days ahead), -A 2 includes tomorrow, etc.
+				my $days_ahead = $opt_A > 0 ? $opt_A - 1 : 0;
+				$upper = strftime('%Y-%m-%d', localtime(time + ($days_ahead * 86400)));
 			} else {
 				$upper = parse_timespec($opt_A) || $today;
 			}
@@ -599,9 +601,10 @@ sub get_list_todos {
 		} elsif (defined $opt_A) {
 			$lower = $today;
 		} else {
+			# with only -B, use a single-day window at the -B date
 			$upper = $lower;
 		}
-		($lower, $upper) = ($upper, $lower) if $lower gt $upper;
+		($lower, $upper) = ($upper, $lower) if defined($lower) && defined($upper) && $lower gt $upper;
 		@show = grep {
 			my $sched = $_->{scheduled} // '';
 			my $due	  = $_->{due}		// '';
@@ -664,12 +667,13 @@ sub cmd_done {
 	die $usage unless $query;
 	my $new_status = $opts{r} ? 'todo' : $opts{w} ? 'waiting' : 'done';
 	my @todos = load_todos();
-	my @list_args = @args;
+	my @list_args;
 	push @list_args, '-a' if $opts{a};
 	push @list_args, map { ('-p', $_) } @{$opts{p} // []};
 	push @list_args, map { ('-t', $_) } @{$opts{t} // []};
 	push @list_args, map { ('-A', $_) } @{$opts{A} // []};
 	push @list_args, map { ('-B', $_) } @{$opts{B} // []};
+	push @list_args, @args;
 	my @candidate_todos = get_list_todos(@list_args);
 	my %candidate = map { $_->{id} => 1 } @candidate_todos;
 	my $n = 0;

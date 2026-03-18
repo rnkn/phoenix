@@ -55,7 +55,7 @@ sub tui_prompt {
 	print goto_pos($rows, 1), CLR_EOL;
 	my $prompt_interrupted = 0;
 	my $input = eval {
-		local $SIG{INT} = sub { $prompt_interrupted = 1; die };
+		local $SIG{INT} = sub { $prompt_interrupted = 1; die "Interrupted\n" };
 		$rl->readline($prompt, $prefill);
 	};
 	die $@ if $@ && !$prompt_interrupted;
