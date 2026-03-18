@@ -623,10 +623,12 @@ sub cmd_kill {
 }
 
 sub cmd_done {
+	my $usage = 'Usage: x [-p <project>] [-t <tag>]... [-r|-w] <query>';
     my @args = @_;
-    my %opts = parse_opts('r', \@args);
+    my %opts = parse_opts('rw', \@args);
     my $query = join(' ', @args);
-    my $new_status = $opts{r} ? 'todo' : 'done';
+	die $usage unless $query;
+    my $new_status = $opts{r} ? 'todo' : $opts{w} ? 'waiting' : 'done';
     my @todos = load_todos();
     my $n = 0;
     for my $t (@todos) {
@@ -635,7 +637,7 @@ sub cmd_done {
         $n++;
     }
     save_todos(@todos);
-    printf $opts{r} ? "Reopened %d todo(s)\n" : "Marked %d todo(s) done\n", $n;
+    printf "Marked %d todo(s) as %s\n", $n, $new_status;
 }
 
 sub cmd_waiting {
