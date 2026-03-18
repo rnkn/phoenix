@@ -243,7 +243,7 @@ sub cmd_ui {
 					my $tid	   = $row_map[$cur]{todo}{id} // 0;
 					my $status = $row_map[$cur]{todo}{status} // '';
 					if ($status eq 'done') {
-						eval { TDone::dispatch_command('x', '-r', $tid) };
+						eval { TDone::dispatch_command('x', '-x', $tid) };
 					} else {
 						eval { TDone::dispatch_command('x', $tid) };
 					}
@@ -291,7 +291,7 @@ sub cmd_ui {
 
 			# ---- R: open prompt to mark a query of todos undone ----
 			elsif ($k eq 'R') {
-				my $prefill	 = 'x -r ';
+				my $prefill	 = 'x -x ';
 				my $cmd_line = tui_prompt($rows, ':', $prefill);
 				if ($cmd_line) {
 					eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
@@ -460,7 +460,7 @@ sub cmd_ui {
 				}
 			}
 
-			# ---- >: narrow by tag (-x flag) ----
+			# ---- >: narrow by tag (-t flag) ----
 			elsif ($k eq '<') {
 				my $tag = tui_prompt($rows, 'tag: ');
 				if ($tag) {
