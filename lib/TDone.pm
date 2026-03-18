@@ -209,8 +209,7 @@ sub match_todos {
     my $lq = lc $query;
     return grep {
         index(lc($_->{title}   // ''), $lq) >= 0 ||
-        index(lc($_->{project} // ''), $lq) >= 0 ||
-        index(lc($_->{tags}    // ''), $lq) >= 0
+        index(lc($_->{description} // ''), $lq) >= 0
     } @todos;
 }
 
