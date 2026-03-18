@@ -63,7 +63,7 @@ sub tui_draw {
     print CLEAR;
     my ($title_w, $hdr) = TDone::table_layout($cols);
     print BOLD, $hdr, RESET, "\n";
-    print '-' x $cols, "\n";
+    print "\x{2500}" x $cols, "\n";
 
     my $visible = $rows - 3;
     $visible = 1 if $visible < 1;

@@ -383,7 +383,7 @@ sub print_table {
     my %by_id = map { $_->{id} => $_ } load_todos();
     my ($title_w, $hdr, $row_fmt) = table_layout($cols);
     print $hdr, "\n";
-    print '-' x $cols, "\n";
+    print "\x{2500}" x $cols, "\n";
     for my $t (@todos) {
         my $desc_star = $t->{description} ? '*' : ' ';
         printf $row_fmt,
