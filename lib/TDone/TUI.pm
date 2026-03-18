@@ -231,7 +231,7 @@ sub cmd_ui {
             }
 
             # ---- x: immediately toggle done state of current todo ----
-            elsif ($k eq 'x') {
+            elsif ($k eq 'X') {
                 if (@row_map) {
                     my $tid    = $row_map[$cur]{todo}{id} // 0;
                     my $status = $row_map[$cur]{todo}{status} // '';
@@ -245,7 +245,7 @@ sub cmd_ui {
             }
 
             # ---- X: open prompt to mark a query of todos done ----
-            elsif ($k eq 'X') {
+            elsif ($k eq 'x') {
                 my $prefill  = 'x ';
                 my $cmd_line = tui_prompt($rows, ':', $prefill);
                 if ($cmd_line) {
