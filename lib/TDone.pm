@@ -462,6 +462,7 @@ sub parse_todo_string {
 # ============================================================
 
 sub cmd_add {
+	my $usage = 'Usage: add [-d <timepsace>] [-s <timespec>] [-w] [-m <description>] [!,!!,!!!] [^<project>] [+<tag>]... <title>';
 	my @args = @_;
 	my %opts = parse_opts('et:', \@args);
 	my ($opt_e, $opt_t) = ($opts{e}, defined $opts{t} ? $opts{t}[-1] : undef);
@@ -488,6 +489,8 @@ sub cmd_add {
 }
 
 sub cmd_schedule {
+	# alias for `modify -s <timespace> <query>`
+	my $usage = 'Usage: schedule <timespec> <query>';
 	my @args = @_;
 	my %opts = parse_opts('t:', \@args);
 	my $opt_t = defined $opts{t} ? $opts{t}[-1] : undef;
@@ -505,6 +508,8 @@ sub cmd_schedule {
 }
 
 sub cmd_due {
+	# alias for `modify -d <timespace> <query>`
+	my $usage = 'Usage: due <timespec> <query>';
 	my @args = @_;
 	my %opts = parse_opts('t:', \@args);
 	my $opt_t = defined $opts{t} ? $opts{t}[-1] : undef;
@@ -522,7 +527,7 @@ sub cmd_due {
 }
 
 sub cmd_block {
-	my $usage = "block <blocked-query> <blocking-query>\n";
+	my $usage = "Usage: block <blocked-query> <blocking-query>\n";
 	my ($blocked, $blocking)  = @_;
 	die $usage unless $blocked && $blocking;
 	my @todos	 = load_todos();
@@ -606,10 +611,12 @@ sub get_list_todos {
 }
 
 sub cmd_list {
+	my $usage = 'Usage: list [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>';
 	print_table(get_list_todos(@_));
 }
 
 sub cmd_kill {
+	my $usage = 'Usage: kill [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>';
 	my $query = join(' ', @_);
 	my @todos	= load_todos();
 	my @removed = match_todos($query, @todos);
@@ -620,7 +627,7 @@ sub cmd_kill {
 }
 
 sub cmd_done {
-	my $usage = 'Usage: x [-p <project>] [-t <tag>]... [-r|-w] <query>';
+	my $usage = 'Usage: x [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-r|-w] <query>';
 	my @args = @_;
 	my %opts = parse_opts('rw', \@args);
 	my $query = join(' ', @args);
@@ -638,6 +645,8 @@ sub cmd_done {
 }
 
 sub cmd_waiting {
+	# alias for `modify -w <query>`
+	my $usage = 'Usage: waiting <query>';
 	my $query = join(' ', @_);
 	my @todos = load_todos();
 	my $n = 0;
@@ -651,6 +660,7 @@ sub cmd_waiting {
 }
 
 sub cmd_edit {
+	my $usage = 'Usage: edit <query>';
 	my $query = join(' ', @_);
 	my @todos = load_todos();
 	my $n = 0;
@@ -664,6 +674,7 @@ sub cmd_edit {
 }
 
 sub cmd_modify {
+	my $usage		= 'Usage: modify [-d <timespec>] [-s <timespec>] [-p <project>] [-t <tag>]... <query>';
 	my @args		= @_;
 	my %opts		= parse_opts('x:X:p:', \@args);
 	my @new_tags	= @{$opts{x} // []};
@@ -698,17 +709,19 @@ sub cmd_modify {
 # ============================================================
 
 our %CMD = (
-	add		 => \&cmd_add,
-	schedule => \&cmd_schedule,
-	due		 => \&cmd_due,
-	block	 => \&cmd_block,
-	list	 => \&cmd_list,
-	ls		 => \&cmd_list,		# alias — excluded from prefix matching
-	kill	 => \&cmd_kill,
-	x		 => \&cmd_done,
-	waiting	 => \&cmd_waiting,
-	edit	 => \&cmd_edit,
-	modify	 => \&cmd_modify,
+	add			=> \&cmd_add,
+	schedule	=> \&cmd_schedule,
+	due			=> \&cmd_due,
+	block		=> \&cmd_block,
+	tag			=> \&cmd_tag,		# 'Usage: tag <tag> <query>'; alias for `modify -t <tag> <query>`
+	list		=> \&cmd_list,
+	ls			=> \&cmd_list,		# alias — excluded from prefix matching
+	kill		=> \&cmd_kill,
+	x			=> \&cmd_done,
+	waiting		=> \&cmd_waiting,
+	edit		=> \&cmd_edit,
+	modify		=> \&cmd_modify,
+	flush		=> \&cmd_flush,		# 'Usage: flush'; delete all done todos and renumber remaining todos from 1
 );
 
 # Commands that are pure aliases; they match exactly but are not used for
