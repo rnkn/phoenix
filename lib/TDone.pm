@@ -473,10 +473,10 @@ sub cmd_add {
 	my @args = @_;
 	my %opts = parse_opts('ed:s:wm:', \@args, $usage);
 	my $opt_e = $opts{e} ? 1 : 0;
-	my $opt_d = $opts{d} ? parse_timespec($opts{d}[-1]) : '';
-	my $opt_s = $opts{s} ? parse_timespec($opts{s}[-1]) : '';
+	my $opt_d = defined $opts{d} ? parse_timespec($opts{d}[-1]) : '';
+	my $opt_s = defined $opts{s} ? parse_timespec($opts{s}[-1]) : '';
 	my $opt_w = $opts{w} ? 1 : 0;
-	my $opt_m = $opts{m} ? $opts{m}[-1] : '';
+	my $opt_m = defined $opts{m} ? $opts{m}[-1] : '';
 	my $str = join(' ', @args);
 	die $usage unless $str;
 
@@ -560,7 +560,7 @@ sub get_list_todos {
 	my @args = @_;
 	my %opts = parse_opts('axwA:B:t:p:', \@args, $usage);
 	my ($opt_a, $opt_x, $opt_w) = ($opts{a}, $opts{x}, $opts{w});
-	my ($opt_A, $opt_B) = ($opts{A} ? $opts{A}[-1] : undef, $opts{B} ? $opts{B}[-1] : undef);
+	my ($opt_A, $opt_B) = (defined $opts{A} ? $opts{A}[-1] : undef, defined $opts{B} ? $opts{B}[-1] : undef);
 	my @filter_tags		= @{$opts{t} // []};
 	my @filter_projects = @{$opts{p} // []};
 	my $query = join(' ', @args);
@@ -575,11 +575,11 @@ sub get_list_todos {
 	} else {
 		@show = grep { ($_->{status} // '') ne 'done' } @todos;
 	}
-	if ($opt_A || $opt_B) {
+	if (defined $opt_A || defined $opt_B) {
 		my $today = strftime('%Y-%m-%d', localtime);
 		my $upper;
 		my $lower;
-		if ($opt_A) {
+		if (defined $opt_A) {
 			if ($opt_A =~ /^\d+$/) {
 				# -A 1 means today (0 days ahead), -A 2 includes tomorrow, etc.
 				my $days_ahead = $opt_A > 0 ? $opt_A - 1 : 0;
@@ -588,22 +588,22 @@ sub get_list_todos {
 				$upper = parse_timespec($opt_A) || $today;
 			}
 		}
-		if ($opt_B) {
+		if (defined $opt_B) {
 			if ($opt_B =~ /^\d+$/) {
 				$lower = strftime('%Y-%m-%d', localtime(time - ($opt_B * 86400)));
 			} else {
 				$lower = parse_timespec($opt_B) || $today;
 			}
 		}
-		if ($opt_A && $opt_B) {
+		if (defined $opt_A && defined $opt_B) {
 			# cumulative window from -B date to -A date
-		} elsif ($opt_A) {
+		} elsif (defined $opt_A) {
 			$lower = $today;
 		} else {
 			# with only -B, use a single-day window at the -B date
 			$upper = $lower;
 		}
-		($lower, $upper) = ($upper, $lower) if $lower && $upper && $lower gt $upper;
+		($lower, $upper) = ($upper, $lower) if defined($lower) && defined($upper) && $lower gt $upper;
 		@show = grep {
 			my $sched = $_->{scheduled} // '';
 			my $due	  = $_->{due}		// '';
@@ -715,18 +715,18 @@ sub cmd_modify {
 	my @new_tags	= @{$opts{t} // []};
 	my @remove_tags = @{$opts{T} // []};
 	my $project		= $opts{p} ? $opts{p}[-1] : undef;
-	my $due			= $opts{d} ? parse_timespec($opts{d}[-1]) : undef;
-	my $sched		= $opts{s} ? parse_timespec($opts{s}[-1]) : undef;
+	my $due			= defined $opts{d} ? parse_timespec($opts{d}[-1]) : undef;
+	my $sched		= defined $opts{s} ? parse_timespec($opts{s}[-1]) : undef;
 	my $set_waiting = $opts{w} ? 1 : 0;
-	die $usage unless @new_tags || @remove_tags || $project || $due || $sched || $set_waiting;
+	die $usage unless @new_tags || @remove_tags || defined $project || defined $due || defined $sched || $set_waiting;
 	my $query = join(' ', @args);
 	die $usage unless $query;
 	my @todos = load_todos();
 	my $n = 0;
 	for my $t (@todos) {
 		next unless match_todos($query, $t);
-		$t->{due} = $due if $due;
-		$t->{scheduled} = $sched if $sched;
+		$t->{due} = $due if defined $due;
+		$t->{scheduled} = $sched if defined $sched;
 		for my $tag (@new_tags) {
 			my @existing = split(/\s+/, $t->{tags} // '');
 			unless (grep { $_ eq $tag } @existing) {
@@ -737,7 +737,7 @@ sub cmd_modify {
 			my @existing = split(/\s+/, $t->{tags} // '');
 			$t->{tags} = join(' ', grep { $_ ne $tag } @existing);
 		}
-		$t->{project} = $project if $project;
+		$t->{project} = $project if defined $project;
 		$t->{status} = 'waiting' if $set_waiting;
 		$n++;
 	}
