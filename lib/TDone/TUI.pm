@@ -53,7 +53,14 @@ sub tui_prompt {
 
 	ReadMode('restore');
 	print goto_pos($rows, 1), CLR_EOL;
-	my $input = $rl->readline($prompt, $prefill) // '';
+	my $prompt_interrupted = 0;
+	my $input = eval {
+		local $SIG{INT} = sub { $prompt_interrupted = 1; die "Interrupted\n" };
+		$rl->readline($prompt, $prefill);
+	};
+	die $@ if $@ && !$prompt_interrupted;
+	$input = '' if $prompt_interrupted;
+	$input //= '';
 	ReadMode('raw');
 	return $input;
 }
@@ -236,7 +243,7 @@ sub cmd_ui {
 					my $tid	   = $row_map[$cur]{todo}{id} // 0;
 					my $status = $row_map[$cur]{todo}{status} // '';
 					if ($status eq 'done') {
-						eval { TDone::dispatch_command('x', '-r', $tid) };
+						eval { TDone::dispatch_command('x', '-x', $tid) };
 					} else {
 						eval { TDone::dispatch_command('x', $tid) };
 					}
@@ -255,7 +262,7 @@ sub cmd_ui {
 			}
 
 			# ---- W: mark waiting via command prompt ----
-			elsif ($k eq 'W') {
+			elsif ($k eq 'W' || $k eq '~') {
 				if (@row_map) {
 					my $tid = $row_map[$cur]{todo}{id} // 0;
 					my $cmd_line = tui_prompt($rows, ':', "waiting $tid");
@@ -267,10 +274,13 @@ sub cmd_ui {
 			}
 
 			# ---- B: block current todo by a query of todos ----
-			elsif ($k eq 'B') {
+			elsif ($k eq 'B' || $k eq '=') {
 				if (@row_map) {
-					my $tid		= $row_map[$cur]{todo}{id} // 0;
-					my $prefill = "block $tid ";
+					my $todo	= $row_map[$cur]{todo};
+					my $tid		= $todo->{id} // 0;
+					my @existing = grep { /\S/ } split(/\s+/, $todo->{blocked_by} // '');
+					my $prefill = "block $tid";
+					$prefill .= " " . join(' ', @existing) if @existing;
 					my $cmd_line = tui_prompt($rows, ':', $prefill);
 					if ($cmd_line) {
 						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
@@ -279,11 +289,21 @@ sub cmd_ui {
 				}
 			}
 
+			# ---- R: open prompt to mark a query of todos undone ----
+			elsif ($k eq 'R') {
+				my $prefill	 = 'x -x ';
+				my $cmd_line = tui_prompt($rows, ':', $prefill);
+				if ($cmd_line) {
+					eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+					warn $@ if $@;
+				}
+			}
+
 			# ---- S: set scheduled date via command prompt ----
 			elsif ($k eq 'S') {
 				if (@row_map) {
 					my $tid = $row_map[$cur]{todo}{id} // 0;
-					my $cmd_line = tui_prompt($rows, ':', "schedule $tid -t ");
+					my $cmd_line = tui_prompt($rows, ':', "modify $tid -s ");
 					if ($cmd_line) {
 						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
@@ -295,7 +315,7 @@ sub cmd_ui {
 			elsif ($k eq 'D') {
 				if (@row_map) {
 					my $tid = $row_map[$cur]{todo}{id} // 0;
-					my $cmd_line = tui_prompt($rows, ':', "due $tid -t ");
+					my $cmd_line = tui_prompt($rows, ':', "modify $tid -d ");
 					if ($cmd_line) {
 						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
@@ -316,11 +336,11 @@ sub cmd_ui {
 				}
 			}
 
-			# ---- +: add tag via command prompt (modify <id> -x <tag>) ----
+			# ---- +: add tag via command prompt (modify <id> -t <tag>) ----
 			elsif ($k eq '+') {
 				if (@row_map) {
 					my $tid		= $row_map[$cur]{todo}{id} // 0;
-					my $prefill = "modify $tid -x ";
+					my $prefill = "modify $tid -t ";
 					my $cmd_line = tui_prompt($rows, ':', $prefill);
 					if ($cmd_line) {
 						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
@@ -329,11 +349,11 @@ sub cmd_ui {
 				}
 			}
 
-			# ---- -: remove tag via command prompt (modify <id> -X <tag>) ----
+			# ---- -: remove tag via command prompt (modify <id> -T <tag>) ----
 			elsif ($k eq '-') {
 				if (@row_map) {
 					my $tid		= $row_map[$cur]{todo}{id} // 0;
-					my $prefill = "modify $tid -X ";
+					my $prefill = "modify $tid -T ";
 					my $cmd_line = tui_prompt($rows, ':', $prefill);
 					if ($cmd_line) {
 						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
@@ -440,11 +460,11 @@ sub cmd_ui {
 				}
 			}
 
-			# ---- >: narrow by tag (-x flag) ----
+			# ---- >: narrow by tag (-t flag) ----
 			elsif ($k eq '<') {
 				my $tag = tui_prompt($rows, 'tag: ');
 				if ($tag) {
-					push @list_args, '-x', $tag;
+					push @list_args, '-t', $tag;
 					$cur	= 0;
 					$scroll = 0;
 				}
