@@ -1,11 +1,12 @@
 package TDone;
 use strict;
 use warnings;
+use open qw(:std :utf8);
 use Exporter qw(import);
-use POSIX         qw(strftime mktime);
-use File::Temp    qw(tempfile);
+use POSIX qw(strftime mktime);
+use File::Temp qw(tempfile);
 use Path::Tiny;
-use List::Util    qw(max);
+use List::Util qw(max);
 use YAML::Tiny;
 use Term::ReadKey;
 

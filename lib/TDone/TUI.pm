@@ -1,6 +1,7 @@
 package TDone::TUI;
 use strict;
 use warnings;
+use open qw(:std :utf8);
 use List::Util qw(max min);
 use Term::ReadKey;
 use Term::ReadLine::Tiny;
