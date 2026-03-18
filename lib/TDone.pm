@@ -522,25 +522,22 @@ sub cmd_due {
 }
 
 sub cmd_block {
-    my @args  = @_;
-    my ($id, $blockers_query) = @args;
-    die "Usage: block <id> <query>\n" unless defined $id && $id =~ /^\d+$/ && defined $blockers_query;
+	my $usage = "block <blocked-query> <blocking-query>\n";
+    my ($blocked, $blocking)  = @_;
+    die $usage unless $blocked && $blocking;
     my @todos    = load_todos();
-    my @blocked  = grep { ($_->{id} // 0) == $id } @todos;
-    return print "No todo with id '$id'\n" unless @blocked;
-    my @blockers = match_todos($blockers_query, @todos);
-    return print "No todos matching '$blockers_query'\n" unless @blockers;
-    my %blocker_ids = map { $_->{id} => 1 } @blockers;
-    my $n = 0;
-    for my $t (@blocked) {
+    my @blocking_todos = match_todos($blocking, @todos);
+    return print "No todos matching '$blocking'\n" unless @blocking_todos;
+    my %blocking_ids = map { $_->{id} => 1 } @blocking_todos;
+    for my $t (@todos) {
+		next unless ($t->{id} // 0) == $blocked;
         my @existing = grep { /\S/ } split(/\s+/, $t->{blocked_by} // '');
         my %seen = map { $_ => 1 } @existing;
-        my @new_blockers = grep { !$seen{$_} } sort keys %blocker_ids;
-        $t->{blocked_by} = join(' ', @existing, @new_blockers);
-        $n++;
+        my @new_blocking_ids = grep { !$seen{$_} } sort keys %blocking_ids;
+        $t->{blocked_by} = join(' ', @existing, @new_blocking_ids);
     }
     save_todos(@todos);
-    printf "%d todo(s) now blocked by %d todo(s)\n", $n, scalar keys %blocker_ids;
+    printf "Todo %s is now blocked by %d todo(s)\n", $blocked, scalar keys %blocking_ids;
 }
 
 sub get_list_todos {
