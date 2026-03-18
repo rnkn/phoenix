@@ -496,57 +496,59 @@ sub cmd_ui {
                 $scroll = 0;
             }
 
-            # ---- h: help ----
-            elsif ($k eq 'h') {
-                ReadMode('normal');
-                print CLEAR;
-                my @bindings = (
-                    [ 'j / ^N / Down',       'Move highlight down'                              ],
-                    [ 'k / ^P / Up',         'Move highlight up'                                ],
-                    [ 'g / ESC-<',           'Move to top'                                      ],
-                    [ 'G / ESC->',           'Move to bottom'                                   ],
-                    [ '^L',                  'Repaint screen'                                   ],
-                    [ 'd / ^D',              'Scroll half a screen down'                        ],
-                    [ 'u / ^U',              'Scroll half a screen up'                          ],
-                    [ 'SPC / ^V / f / ^F',   'Scroll a full screen down'                        ],
-                    [ 'b / ^B / ESC-v',      'Scroll a full screen up'                          ],
-                    [ 'RET',                 'Expand/collapse todo description'                 ],
-                    [ 'x',                   'Toggle current todo done/incomplete'              ],
-                    [ 'X',                   'Prompt to mark a query of todos done'             ],
-                    [ 'W',                   'Mark todo waiting'                                ],
-                    [ 'B',                   'Prompt to block current todo by a query of todos' ],
-                    [ 'A',                   'Add a new todo'                                   ],
-                    [ 'K',                   'Kill (delete) current todo'                       ],
-                    [ 'S',                   'Set scheduled date (timespec)'                    ],
-                    [ 'D',                   'Set due date (timespec)'                          ],
-                    [ '+',                   'Add tag (modify <id> -x <tag>)'                   ],
-                    [ '-',                   'Remove tag (modify <id> -X <tag>)'                ],
-                    [ '^',                   'Set project (modify <id> -p <project>)'           ],
-                    [ 'e',                   'Edit todo in $EDITOR (via prompt)'                ],
-                    [ 'E',                   'Edit current todo immediately in $EDITOR'         ],
-                    [ '/',                   'Search displayed rows (highlight only)'           ],
-                    [ 'n',                   'Next search match'                                ],
-                    [ '? / N',               'Previous search match (search backward)'         ],
-                    [ '\\',                  'Open command prompt with :list'                   ],
-                    [ '>',                   'Narrow by tag (-x)'                               ],
-                    [ '<',                   'Clear list narrowing'                             ],
-                    [ 'ESC-u / M-u',         'Clear search highlighting'                        ],
-                    [ ':',                   'Enter command (list/ls updates display)'          ],
-                    [ ')',                   "Narrow to current todo's project (-p)"            ],
-                    [ '(',                   'Clear project narrowing'                          ],
-                    [ 'h',                   'This help'                                        ],
-                    [ 'q',                   'Quit'                                             ],
-                );
-                my $kw = max(map { length($_->[0]) } @bindings);
-                print "tdone TUI key bindings:\n\n";
-                printf "  %-*s  %s\n", $kw, $_->[0], $_->[1] for @bindings;
-                print "\nPress any key...\n";
-                ReadMode('raw');
-                ReadKey(0);
-            }
-        }
-        1;
-    };
+			# ---- h: help ----
+			elsif ($k eq 'h') {
+				ReadMode('normal');
+				print CLEAR;
+				my @bindings = (
+					[ 'j / ^N / Down',		 'Select next row'								],
+					[ 'k / ^P / Up',		 'Select previous row'							],
+					[ 'g / ESC-<',			 'Move to top'									],
+					[ 'G / ESC->',			 'Move to bottom'								],
+					[ '^L',					 'Repaint screen'								],
+					[ 'd / ^D',				 'Scroll half screen down'						],
+					[ 'u / ^U',				 'Scroll half screen up'						],
+					[ 'SPC / ^V / f / ^F',	 'Scroll full screen down'						],
+					[ 'b / ^B / ESC-v',		 'Scroll full screen up'						],
+					[ 'RET',				 'Expand/collapse todo description'				],
+					[ 'x',					 'Mark todos done'								],
+					[ 'X',					 'Toggle current todo done/todo'				],
+					[ 'R',					 'Mark todos undone'							],
+					[ 'W / ~',				 'Mark todo waiting'							],
+					[ 'B / =',				 'Mark current todo as blocked'					],
+					[ 'A',					 'Add a new todo'								],
+					[ 'K',					 'Kill (delete) current todo'					],
+					[ 'D',					 'Set due date (timespec)'						],
+					[ 'S',					 'Set scheduled date (timespec)'				],
+					[ '+',					 'Add tag to current todo'						],
+					[ '-',					 'Remove tag from current'						],
+					[ '^',					 'Set project of current todo'					],
+					[ 'e',					 'Edit todos in $EDITOR'						],
+					[ 'E',					 'Edit current todo immediately in $EDITOR'		],
+					[ '/',					 'Search forward'								],
+					[ '?',					 'Search backward'								],
+					[ 'n',					 'Next search match'							],
+					[ 'N',					 'Previous search match'						],
+					[ '\\',					 'Narrow by query'								],
+					[ '<',					 'Narrow by tag'								],
+					[ '>',					 'Clear narrow by tag'							],
+					[ 'ESC-u / M-u',		 'Clear search highlighting'					],
+					[ ':',					 'Enter command'								],
+					[ '(',					 'Narrow to current project'					],
+					[ ')',					 'Clear narrow by project'						],
+					[ 'h',					 'This help'									],
+					[ 'q / ^C',				 'Quit'											],
+				);
+				my $kw = max(map { length($_->[0]) } @bindings);
+				print "tdone TUI key bindings:\n\n";
+				printf "  %-*s	%s\n", $kw, $_->[0], $_->[1] for @bindings;
+				print "\nPress any key...\n";
+				ReadMode('raw');
+				ReadKey(0);
+			}
+		}
+		1;
+	};
 
     ReadMode('restore');
     print CLEAR;
