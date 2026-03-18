@@ -53,12 +53,13 @@ sub tui_prompt {
 
 	ReadMode('restore');
 	print goto_pos($rows, 1), CLR_EOL;
+	my $prompt_interrupted = 0;
 	my $input = eval {
-		local $SIG{INT} = sub { die "__TDONE_TUI_PROMPT_CANCEL__\n" };
+		local $SIG{INT} = sub { $prompt_interrupted = 1; die };
 		$rl->readline($prompt, $prefill);
 	};
-	$input = '' if $@ && $@ =~ /__TDONE_TUI_PROMPT_CANCEL__/;
-	die $@ if $@ && $@ !~ /__TDONE_TUI_PROMPT_CANCEL__/;
+	die $@ if $@ && !$prompt_interrupted;
+	$input = '' if $prompt_interrupted;
 	$input //= '';
 	ReadMode('raw');
 	return $input;
@@ -302,7 +303,7 @@ sub cmd_ui {
 			elsif ($k eq 'S') {
 				if (@row_map) {
 					my $tid = $row_map[$cur]{todo}{id} // 0;
-					my $cmd_line = tui_prompt($rows, ':', "schedule today $tid");
+					my $cmd_line = tui_prompt($rows, ':', "modify $tid -s ");
 					if ($cmd_line) {
 						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
@@ -314,7 +315,7 @@ sub cmd_ui {
 			elsif ($k eq 'D') {
 				if (@row_map) {
 					my $tid = $row_map[$cur]{todo}{id} // 0;
-					my $cmd_line = tui_prompt($rows, ':', "due today $tid");
+					my $cmd_line = tui_prompt($rows, ':', "modify $tid -d ");
 					if ($cmd_line) {
 						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
