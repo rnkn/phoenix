@@ -196,6 +196,20 @@ sub parse_opts {
 	return %opts;
 }
 
+sub usage_die {
+	my ($usage) = @_;
+	$usage //= 'Usage error';
+	$usage .= "\n" unless $usage =~ /\n\z/;
+	die $usage;
+}
+
+sub parse_opts_usage {
+	my ($usage, $optstring, $args_ref) = @_;
+	my %opts = eval { parse_opts($optstring, $args_ref) };
+	usage_die($usage) if $@;
+	return %opts;
+}
+
 # ============================================================
 # TASK MATCHING AND SORTING
 # ============================================================
@@ -464,25 +478,38 @@ sub parse_todo_string {
 sub cmd_add {
 	my $usage = 'Usage: add [-d <timepsace>] [-s <timespec>] [-w] [-m <description>] [!,!!,!!!] [^<project>] [+<tag>]... <title>';
 	my @args = @_;
-	my %opts = parse_opts('et:', \@args);
-	my ($opt_e, $opt_t) = ($opts{e}, defined $opts{t} ? $opts{t}[-1] : undef);
+	my %opts = parse_opts_usage($usage, 'd:s:wm:', \@args);
+	my $opt_d = defined $opts{d} ? parse_timespec($opts{d}[-1]) : '';
+	my $opt_s = defined $opts{s} ? parse_timespec($opts{s}[-1]) : '';
+	my $opt_w = $opts{w} ? 1 : 0;
+	my $opt_m = defined $opts{m} ? $opts{m}[-1] : '';
 	my $str = join(' ', @args);
+	usage_die($usage) unless $str =~ /\S/;
 
 	my %fields = parse_todo_string($str);
+	usage_die($usage) unless $fields{title} =~ /\S/;
+
+	my $priority = '';
+	if ($fields{title} =~ s/(?:\s+|^)(!!!|!!|!)(?:\s+|$)/ /) {
+		my $bang = $1;
+		$priority = length($bang);
+		$fields{title} =~ s/\s+/ /g;
+		$fields{title} =~ s/^\s+|\s+$//g;
+	}
+
 	my @todos  = load_todos();
 	my %todo   = (
 		id			=> next_id(@todos),
-		status		=> 'todo',
+		status		=> $opt_w ? 'waiting' : 'todo',
 		project		=> $fields{project},
 		title		=> $fields{title},
-		scheduled	=> '',
-		due			=> defined $opt_t ? parse_timespec($opt_t) : '',
-		priority	=> '',
+		scheduled	=> $opt_s,
+		due			=> $opt_d,
+		priority	=> $priority,
 		blocked_by	=> '',
 		tags		=> $fields{tags},
-		description => '',
+		description => $opt_m,
 	);
-	edit_todo_yaml(\%todo) if $opt_e;
 	push @todos, \%todo;
 	save_todos(@todos);
 	printf "Added todo %d: %s\n", $todo{id}, $todo{title};
@@ -492,71 +519,62 @@ sub cmd_schedule {
 	# alias for `modify -s <timespace> <query>`
 	my $usage = 'Usage: schedule <timespec> <query>';
 	my @args = @_;
-	my %opts = parse_opts('t:', \@args);
-	my $opt_t = defined $opts{t} ? $opts{t}[-1] : undef;
+	usage_die($usage) unless @args >= 2;
+	my $timespec = shift @args;
 	my $query = join(' ', @args);
-	my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
-	my @todos = load_todos();
-	my $n = 0;
-	for my $t (@todos) {
-		next unless match_todos($query, $t);
-		$t->{scheduled} = $date;
-		$n++;
-	}
-	save_todos(@todos);
-	printf "Scheduled %d todo(s) for %s\n", $n, $date;
+	usage_die($usage) unless $timespec =~ /\S/ && $query =~ /\S/;
+	cmd_modify('-s', $timespec, $query);
 }
 
 sub cmd_due {
 	# alias for `modify -d <timespace> <query>`
 	my $usage = 'Usage: due <timespec> <query>';
 	my @args = @_;
-	my %opts = parse_opts('t:', \@args);
-	my $opt_t = defined $opts{t} ? $opts{t}[-1] : undef;
+	usage_die($usage) unless @args >= 2;
+	my $timespec = shift @args;
 	my $query = join(' ', @args);
-	my $date  = defined $opt_t ? parse_timespec($opt_t) : strftime('%Y-%m-%d', localtime);
-	my @todos = load_todos();
-	my $n = 0;
-	for my $t (@todos) {
-		next unless match_todos($query, $t);
-		$t->{due} = $date;
-		$n++;
-	}
-	save_todos(@todos);
-	printf "Set due date of %d todo(s) to %s\n", $n, $date;
+	usage_die($usage) unless $timespec =~ /\S/ && $query =~ /\S/;
+	cmd_modify('-d', $timespec, $query);
 }
 
 sub cmd_block {
 	my $usage = "Usage: block <blocked-query> <blocking-query>\n";
-	my ($blocked, $blocking)  = @_;
-	die $usage unless $blocked && $blocking;
+	my @args = @_;
+	usage_die($usage) unless @args >= 2;
+	my $blocked_query = shift @args;
+	my $blocking_query = join(' ', @args);
+	usage_die($usage) unless $blocked_query =~ /\S/ && $blocking_query =~ /\S/;
 	my @todos	 = load_todos();
-	my @blocking_todos = match_todos($blocking, @todos);
-	return print "No todos matching '$blocking'\n" unless @blocking_todos;
+	my @blocked_todos = match_todos($blocked_query, @todos);
+	return print "No todos matching '$blocked_query'\n" unless @blocked_todos;
+	my @blocking_todos = match_todos($blocking_query, @todos);
+	return print "No todos matching '$blocking_query'\n" unless @blocking_todos;
 	my %blocking_ids = map { $_->{id} => 1 } @blocking_todos;
+	my $n = 0;
 	for my $t (@todos) {
-		next unless ($t->{id} // 0) == $blocked;
-		my @existing = grep { /\S/ } split(/\s+/, $t->{blocked_by} // '');
-		my %seen = map { $_ => 1 } @existing;
-		my @new_blocking_ids = grep { !$seen{$_} } sort keys %blocking_ids;
-		$t->{blocked_by} = join(' ', @existing, @new_blocking_ids);
+		next unless grep { ($_->{id} // 0) == ($t->{id} // 0) } @blocked_todos;
+		my @new_blocking_ids = grep { $_ != ($t->{id} // 0) } sort keys %blocking_ids;
+		$t->{blocked_by} = join(' ', @new_blocking_ids);
+		$n++;
 	}
 	save_todos(@todos);
-	printf "Todo %s is now blocked by %d todo(s)\n", $blocked, scalar keys %blocking_ids;
+	printf "Blocked %d todo(s) by %d todo(s)\n", $n, scalar keys %blocking_ids;
 }
 
 sub get_list_todos {
 	my @args = @_;
-	my %opts = parse_opts('adA:B:x:p:', \@args);
-	my ($opt_a, $opt_d) = ($opts{a}, $opts{d});
+	my %opts = parse_opts_usage('Usage: list [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>', 'axwA:B:t:p:', \@args);
+	my ($opt_a, $opt_x, $opt_w) = ($opts{a}, $opts{x}, $opts{w});
 	my ($opt_A, $opt_B) = (defined $opts{A} ? $opts{A}[-1] : undef, defined $opts{B} ? $opts{B}[-1] : undef);
-	my @filter_tags		= @{$opts{x} // []};
+	my @filter_tags		= @{$opts{t} // []};
 	my @filter_projects = @{$opts{p} // []};
 	my $query = join(' ', @args);
 	my @todos = load_todos();
 	my @show;
-	if ($opt_d) {
+	if ($opt_x) {
 		@show = grep { ($_->{status} // '') eq 'done' } @todos;
+	} elsif ($opt_w) {
+		@show = grep { ($_->{status} // '') eq 'waiting' } @todos;
 	} elsif ($opt_a) {
 		@show = @todos;
 	} else {
@@ -564,7 +582,9 @@ sub get_list_todos {
 	}
 	if (defined $opt_A) {
 		my $today = strftime('%Y-%m-%d', localtime);
-		my $ahead = strftime('%Y-%m-%d', localtime(time + $opt_A * 86400));
+		my $ahead = $opt_A =~ /^-?\d+$/ ? strftime('%Y-%m-%d', localtime(time + $opt_A * 86400)) : parse_timespec($opt_A);
+		$ahead = $today unless $ahead;
+		($today, $ahead) = ($ahead, $today) if $ahead lt $today;
 		@show = grep {
 			my $sched = $_->{scheduled} // '';
 			my $due	  = $_->{due}		// '';
@@ -574,7 +594,9 @@ sub get_list_todos {
 	}
 	if (defined $opt_B) {
 		my $today  = strftime('%Y-%m-%d', localtime);
-		my $before = strftime('%Y-%m-%d', localtime(time - $opt_B * 86400));
+		my $before = $opt_B =~ /^-?\d+$/ ? strftime('%Y-%m-%d', localtime(time - $opt_B * 86400)) : parse_timespec($opt_B);
+		$before = $today unless $before;
+		($before, $today) = ($today, $before) if $before gt $today;
 		@show = grep {
 			my $sched = $_->{scheduled} // '';
 			my $due	  = $_->{due}		// '';
@@ -617,9 +639,23 @@ sub cmd_list {
 
 sub cmd_kill {
 	my $usage = 'Usage: kill [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>';
-	my $query = join(' ', @_);
+	my @args = @_;
+	my %opts = parse_opts_usage($usage, 'axwA:B:t:p:', \@args);
+	my $query = join(' ', @args);
+	usage_die($usage) unless $query =~ /\S/;
+	my @list_args = @args;
+	for my $f (qw(a x w A B t p)) {
+		next unless exists $opts{$f};
+		if (ref $opts{$f} eq 'ARRAY') {
+			for my $v (@{$opts{$f}}) {
+				push @list_args, "-$f", $v;
+			}
+		} else {
+			push @list_args, "-$f";
+		}
+	}
 	my @todos	= load_todos();
-	my @removed = match_todos($query, @todos);
+	my @removed = get_list_todos(@list_args);
 	return print "No matching todos\n" unless @removed;
 	my %rm = map { $_->{id} => 1 } @removed;
 	save_todos(grep { !$rm{$_->{id}} } @todos);
@@ -629,14 +665,23 @@ sub cmd_kill {
 sub cmd_done {
 	my $usage = 'Usage: x [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-r|-w] <query>';
 	my @args = @_;
-	my %opts = parse_opts('rw', \@args);
+	my %opts = parse_opts_usage($usage, 'arwp:t:A:B:', \@args);
 	my $query = join(' ', @args);
-	die $usage unless $query;
+	usage_die($usage) unless $query =~ /\S/;
 	my $new_status = $opts{r} ? 'todo' : $opts{w} ? 'waiting' : 'done';
 	my @todos = load_todos();
+	my @list_args;
+	push @list_args, '-a' if $opts{a};
+	push @list_args, map { ('-p', $_) } @{$opts{p} // []};
+	push @list_args, map { ('-t', $_) } @{$opts{t} // []};
+	push @list_args, map { ('-A', $_) } @{$opts{A} // []};
+	push @list_args, map { ('-B', $_) } @{$opts{B} // []};
+	push @list_args, $query;
+	my @candidate_todos = get_list_todos(@list_args);
+	my %candidate = map { $_->{id} => 1 } @candidate_todos;
 	my $n = 0;
 	for my $t (@todos) {
-		next unless match_todos($query, $t);
+		next unless $candidate{$t->{id}};
 		$t->{status} = $new_status;
 		$n++;
 	}
@@ -647,21 +692,14 @@ sub cmd_done {
 sub cmd_waiting {
 	# alias for `modify -w <query>`
 	my $usage = 'Usage: waiting <query>';
-	my $query = join(' ', @_);
-	my @todos = load_todos();
-	my $n = 0;
-	for my $t (@todos) {
-		next unless match_todos($query, $t);
-		$t->{status} = 'waiting';
-		$n++;
-	}
-	save_todos(@todos);
-	printf "Marked %d todo(s) waiting\n", $n;
+	usage_die($usage) unless @_ && join(' ', @_) =~ /\S/;
+	cmd_modify('-w', @_);
 }
 
 sub cmd_edit {
 	my $usage = 'Usage: edit <query>';
 	my $query = join(' ', @_);
+	usage_die($usage) unless $query =~ /\S/;
 	my @todos = load_todos();
 	my $n = 0;
 	for my $t (@todos) {
@@ -674,19 +712,24 @@ sub cmd_edit {
 }
 
 sub cmd_modify {
-	my $usage		= 'Usage: modify [-d <timespec>] [-s <timespec>] [-p <project>] [-t <tag>]... <query>';
+	my $usage		= 'Usage: modify [-d <timespec>] [-s <timespec>] [-p <project>] [-t <tag>]... [-T <tag>]... <query>';
 	my @args		= @_;
-	my %opts		= parse_opts('x:X:p:', \@args);
-	my @new_tags	= @{$opts{x} // []};
-	my @remove_tags = @{$opts{X} // []};
+	my %opts		= parse_opts_usage($usage, 'd:s:t:T:p:w', \@args);
+	my @new_tags	= @{$opts{t} // []};
+	my @remove_tags = @{$opts{T} // []};
 	my $project		= $opts{p} ? $opts{p}[-1] : undef;
-	die "Usage: modify <query> [-x <tag>]... [-X <tag>]... [-p <project>]\n"
-		unless @new_tags || @remove_tags || defined $project;
+	my $due			= defined $opts{d} ? parse_timespec($opts{d}[-1]) : undef;
+	my $sched		= defined $opts{s} ? parse_timespec($opts{s}[-1]) : undef;
+	my $set_waiting = $opts{w} ? 1 : 0;
+	usage_die($usage) unless @new_tags || @remove_tags || defined $project || defined $due || defined $sched || $set_waiting;
 	my $query = join(' ', @args);
+	usage_die($usage) unless $query =~ /\S/;
 	my @todos = load_todos();
 	my $n = 0;
 	for my $t (@todos) {
 		next unless match_todos($query, $t);
+		$t->{due} = $due if defined $due;
+		$t->{scheduled} = $sched if defined $sched;
 		for my $tag (@new_tags) {
 			my @existing = split(/\s+/, $t->{tags} // '');
 			unless (grep { $_ eq $tag } @existing) {
@@ -698,10 +741,34 @@ sub cmd_modify {
 			$t->{tags} = join(' ', grep { $_ ne $tag } @existing);
 		}
 		$t->{project} = $project if defined $project;
+		$t->{status} = 'waiting' if $set_waiting;
 		$n++;
 	}
 	save_todos(@todos);
 	printf "Modified %d todo(s)\n", $n;
+}
+
+sub cmd_tag {
+	my $usage = 'Usage: tag <tag> <query>';
+	usage_die($usage) unless @_ >= 2;
+	my ($tag, @rest) = @_;
+	my $query = join(' ', @rest);
+	usage_die($usage) unless $tag =~ /\S/ && $query =~ /\S/;
+	cmd_modify('-t', $tag, $query);
+}
+
+sub cmd_flush {
+	my $usage = 'Usage: flush';
+	usage_die($usage) if @_;
+	my @todos = load_todos();
+	my @kept = grep { ($_->{status} // '') ne 'done' } @todos;
+	my $removed = @todos - @kept;
+	my $id = 1;
+	for my $t (@kept) {
+		$t->{id} = $id++;
+	}
+	save_todos(@kept);
+	printf "Flushed %d done todo(s)\n", $removed;
 }
 
 # ============================================================
