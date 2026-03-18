@@ -441,8 +441,8 @@ sub cmd_ui {
             }
 
             # ---- >: narrow by tag (-x flag) ----
-            elsif ($k eq '>') {
-                my $tag = tui_prompt($rows, 'Narrow by tag: ');
+            elsif ($k eq '<') {
+                my $tag = tui_prompt($rows, 'tag: ');
                 if ($tag) {
                     push @list_args, '-x', $tag;
                     $cur    = 0;
@@ -451,7 +451,7 @@ sub cmd_ui {
             }
 
             # ---- <: clear list narrowing ----
-            elsif ($k eq '<') {
+            elsif ($k eq '>') {
                 @list_args = ();
                 $cur    = 0;
                 $scroll = 0;
@@ -480,7 +480,7 @@ sub cmd_ui {
             }
 
             # ---- ): narrow to current todo's project (-p flag) ----
-            elsif ($k eq ')') {
+            elsif ($k eq '(') {
                 if (@row_map) {
                     my $proj = $row_map[$cur]{todo}{project} // '';
                     @list_args = ($proj ? ('-p', $proj) : ());
@@ -490,7 +490,7 @@ sub cmd_ui {
             }
 
             # ---- (: clear project narrowing ----
-            elsif ($k eq '(') {
+            elsif ($k eq ')') {
                 @list_args = ();
                 $cur    = 0;
                 $scroll = 0;
