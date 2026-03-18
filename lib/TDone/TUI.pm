@@ -270,7 +270,7 @@ sub cmd_ui {
             elsif ($k eq 'B') {
                 if (@row_map) {
                     my $tid     = $row_map[$cur]{todo}{id} // 0;
-                    my $prefill = "block -i $tid ";
+                    my $prefill = "block $tid ";
                     my $cmd_line = tui_prompt($rows, ':', $prefill);
                     if ($cmd_line) {
                         eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
