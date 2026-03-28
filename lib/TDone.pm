@@ -718,9 +718,8 @@ sub cmd_modify {
 	my $due			= defined $opts{d} ? parse_timespec($opts{d}[-1]) : undef;
 	my $sched		= defined $opts{s} ? parse_timespec($opts{s}[-1]) : undef;
 	my $set_waiting = $opts{w} ? 1 : 0;
-	die $usage unless @new_tags || @remove_tags || defined $project || defined $due || defined $sched || $set_waiting;
+	die $usage unless @new_tags || @remove_tags || $project || $due || $sched || $set_waiting;
 	my $query = join(' ', @args);
-	die $usage unless $query;
 	my @todos = load_todos();
 	my $n = 0;
 	for my $t (@todos) {
