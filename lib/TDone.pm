@@ -532,12 +532,29 @@ sub cmd_due {
 }
 
 sub cmd_block {
-	my $usage = "Usage: block <blocked-query> <blocking-query>\n";
+	my $usage = "Usage: block [-r] <blocked-query> [<blocking-query>]\n";
 	my @args = @_;
-	die $usage unless @args >= 2;
+	my %opts = parse_opts('r', \@args, $usage);
+	die $usage unless @args >= ($opts{r} ? 1 : 2);
 	my $blocked_query = shift @args;
+	if ($opts{r}) {
+		# Unblock mode: clear blocked_by for matching todos
+		my @todos = load_todos();
+		my @blocked_todos = match_todos($blocked_query, @todos);
+		return print "No todos matching '$blocked_query'\n" unless @blocked_todos;
+		my %unblock_ids = map { $_->{id} => 1 } @blocked_todos;
+		my $n = 0;
+		for my $t (@todos) {
+			next unless $unblock_ids{$t->{id}};
+			$t->{blocked_by} = '';
+			$n++;
+		}
+		save_todos(@todos);
+		printf "Unblocked %d todo(s)\n", $n;
+		return;
+	}
 	my $blocking_query = join(' ', @args);
-	die $usage unless $blocked_query && $blocking_query;
+	die $usage unless $blocking_query;
 	my @todos	 = load_todos();
 	my @blocked_todos = match_todos($blocked_query, @todos);
 	return print "No todos matching '$blocked_query'\n" unless @blocked_todos;
@@ -598,7 +615,7 @@ sub get_list_todos {
 		if (defined $opt_A && defined $opt_B) {
 			# cumulative window from -B date to -A date
 		} elsif (defined $opt_A) {
-			$lower = $today;
+			# No lower bound — include overdue/previously scheduled tasks
 		} else {
 			# with only -B, use a single-day window at the -B date
 			$upper = $lower;
@@ -607,8 +624,8 @@ sub get_list_todos {
 		@show = grep {
 			my $sched = $_->{scheduled} // '';
 			my $due	  = $_->{due}		// '';
-			($sched =~ /^\d{4}/ && $sched ge $lower && $sched le $upper) ||
-			($due	=~ /^\d{4}/ && $due	  ge $lower && $due	  le $upper)
+			($sched =~ /^\d{4}/ && (!defined $lower || $sched ge $lower) && $sched le $upper) ||
+			($due	=~ /^\d{4}/ && (!defined $lower || $due   ge $lower) && $due	  le $upper)
 		} @show;
 	}
 	# -x <tag> filters (AND): all specified tags must be present
@@ -658,17 +675,18 @@ sub cmd_kill {
 	printf "Deleted %d todo(s)\n", scalar @removed;
 }
 
-sub cmd_done {
-	my $usage = 'Usage: x [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>';
+sub cmd_complete {
+	my $usage = 'Usage: complete [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-r|-w] <query>';
 	my @args = @_;
-	my %opts = parse_opts('axwp:t:A:B:', \@args, $usage);
+	my %opts = parse_opts('arwp:t:A:B:', \@args, $usage);
 	my $query = join(' ', @args);
 	die $usage unless $query;
-	my $new_status = $opts{x} ? 'todo' : $opts{w} ? 'waiting' : 'done';
+	my $undo = $opts{r};
+	my $new_status = $undo ? 'todo' : $opts{w} ? 'waiting' : 'done';
 	my @todos = load_todos();
 	my @list_args;
 	push @list_args, '-a' if $opts{a};
-	push @list_args, '-x' if $opts{x};
+	push @list_args, '-x' if $undo;
 	push @list_args, map { ('-p', $_) } @{$opts{p} // []};
 	push @list_args, map { ('-t', $_) } @{$opts{t} // []};
 	push @list_args, map { ('-A', $_) } @{$opts{A} // []};
@@ -709,23 +727,43 @@ sub cmd_edit {
 }
 
 sub cmd_modify {
-	my $usage		= 'Usage: modify [-d <timespec>] [-s <timespec>] [-p <project>] [-t <tag>]... [-T <tag>]... <query>';
+	my $usage		= 'Usage: modify [-d <timespec>] [-s <timespec>] [-p <project>] [-t <tag>]... [-T <tag>]... [-S] [-D] [-P] [-0|-1|-2|-3] [-w] <query>';
 	my @args		= @_;
-	my %opts		= parse_opts('d:s:t:T:p:w', \@args, $usage);
+
+	# Extract numeric priority flags (-0, -1, -2, -3) before parse_opts
+	my $set_priority = undef;
+	my @filtered_args;
+	for my $arg (@args) {
+		if    ($arg eq '-0') { $set_priority = '';  }
+		elsif ($arg eq '-1') { $set_priority = 1;   }
+		elsif ($arg eq '-2') { $set_priority = 2;   }
+		elsif ($arg eq '-3') { $set_priority = 3;   }
+		else                 { push @filtered_args, $arg; }
+	}
+	@args = @filtered_args;
+
+	my %opts		= parse_opts('d:s:t:T:p:wSDP', \@args, $usage);
 	my @new_tags	= @{$opts{t} // []};
 	my @remove_tags = @{$opts{T} // []};
 	my $project		= $opts{p} ? $opts{p}[-1] : undef;
 	my $due			= defined $opts{d} ? parse_timespec($opts{d}[-1]) : undef;
 	my $sched		= defined $opts{s} ? parse_timespec($opts{s}[-1]) : undef;
-	my $set_waiting = $opts{w} ? 1 : 0;
-	die $usage unless @new_tags || @remove_tags || $project || $due || $sched || $set_waiting;
+	my $set_waiting	= $opts{w} ? 1 : 0;
+	my $clear_sched	= $opts{S} ? 1 : 0;
+	my $clear_due	= $opts{D} ? 1 : 0;
+	my $clear_proj	= $opts{P} ? 1 : 0;
+	die $usage unless @new_tags || @remove_tags || $project || $due || $sched || $set_waiting
+		|| defined $set_priority || $clear_sched || $clear_due || $clear_proj;
 	my $query = join(' ', @args);
 	my @todos = load_todos();
 	my $n = 0;
 	for my $t (@todos) {
 		next unless match_todos($query, $t);
-		$t->{due} = $due if defined $due;
-		$t->{scheduled} = $sched if defined $sched;
+		$t->{due}		= ''     if $clear_due;
+		$t->{scheduled}	= ''     if $clear_sched;
+		$t->{project}	= ''     if $clear_proj;
+		$t->{due}		= $due   if defined $due;
+		$t->{scheduled}	= $sched if defined $sched;
 		for my $tag (@new_tags) {
 			my @existing = split(/\s+/, $t->{tags} // '');
 			unless (grep { $_ eq $tag } @existing) {
@@ -736,8 +774,9 @@ sub cmd_modify {
 			my @existing = split(/\s+/, $t->{tags} // '');
 			$t->{tags} = join(' ', grep { $_ ne $tag } @existing);
 		}
-		$t->{project} = $project if defined $project;
-		$t->{status} = 'waiting' if $set_waiting;
+		$t->{project}  = $project      if defined $project;
+		$t->{priority} = $set_priority if defined $set_priority;
+		$t->{status}   = 'waiting'     if $set_waiting;
 		$n++;
 	}
 	save_todos(@todos);
@@ -785,7 +824,7 @@ our %CMD = (
 	list		=> \&cmd_list,
 	ls			=> \&cmd_list,		# alias — excluded from prefix matching
 	kill		=> \&cmd_kill,
-	x			=> \&cmd_done,
+	complete	=> \&cmd_complete,
 	waiting		=> \&cmd_waiting,
 	edit		=> \&cmd_edit,
 	modify		=> \&cmd_modify,
