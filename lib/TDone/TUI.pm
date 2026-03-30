@@ -237,23 +237,23 @@ sub cmd_ui {
 				}
 			}
 
-			# ---- x: immediately toggle done state of current todo ----
-			elsif ($k eq 'X') {
+			# ---- C: immediately toggle complete state of current todo ----
+			elsif ($k eq 'C') {
 				if (@row_map) {
 					my $tid	   = $row_map[$cur]{todo}{id} // 0;
 					my $status = $row_map[$cur]{todo}{status} // '';
 					if ($status eq 'done') {
-						eval { TDone::dispatch_command('x', '-x', $tid) };
+						eval { TDone::dispatch_command('complete', '-r', $tid) };
 					} else {
-						eval { TDone::dispatch_command('x', $tid) };
+						eval { TDone::dispatch_command('complete', $tid) };
 					}
 					warn $@ if $@;
 				}
 			}
 
-			# ---- X: open prompt to mark a query of todos done ----
-			elsif ($k eq 'x') {
-				my $prefill	 = 'x ';
+			# ---- c: open prompt to mark a query of todos complete ----
+			elsif ($k eq 'c') {
+				my $prefill	 = 'complete ';
 				my $cmd_line = tui_prompt($rows, ':', $prefill);
 				if ($cmd_line) {
 					eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
@@ -289,9 +289,9 @@ sub cmd_ui {
 				}
 			}
 
-			# ---- R: open prompt to mark a query of todos undone ----
+			# ---- R: open prompt to mark a query of todos incomplete ----
 			elsif ($k eq 'R') {
-				my $prefill	 = 'x -x ';
+				my $prefill	 = 'complete -r ';
 				my $cmd_line = tui_prompt($rows, ':', $prefill);
 				if ($cmd_line) {
 					eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
@@ -531,9 +531,9 @@ sub cmd_ui {
 					[ 'SPC / ^V / f / ^F',	 'Scroll full screen down'						],
 					[ 'b / ^B / ESC-v',		 'Scroll full screen up'						],
 					[ 'RET',				 'Expand/collapse todo description'				],
-					[ 'x',					 'Mark todos done'								],
-					[ 'X',					 'Toggle current todo done/todo'				],
-					[ 'R',					 'Mark todos undone'							],
+					[ 'c',					 'Mark todos complete'							],
+					[ 'C',					 'Toggle current todo complete/todo'			],
+					[ 'R',					 'Mark todos incomplete'						],
 					[ 'W / ~',				 'Mark todo waiting'							],
 					[ 'B / =',				 'Mark current todo as blocked'					],
 					[ 'A',					 'Add a new todo'								],
