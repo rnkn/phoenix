@@ -289,8 +289,17 @@ sub cmd_ui {
 				}
 			}
 
-			# ---- R: open prompt to mark a query of todos incomplete ----
+			# ---- R: immediately toggle incomplete state of current todo ----
 			elsif ($k eq 'R') {
+				if (@row_map) {
+					my $tid = $row_map[$cur]{todo}{id} // 0;
+					eval { TDone::dispatch_command('complete', '-r', $tid) };
+					warn $@ if $@;
+				}
+			}
+
+			# ---- r: open prompt to mark a query of todos incomplete ----
+			elsif ($k eq 'r') {
 				my $prefill	 = 'complete -r ';
 				my $cmd_line = tui_prompt($rows, ':', $prefill);
 				if ($cmd_line) {
@@ -533,7 +542,8 @@ sub cmd_ui {
 					[ 'RET',				 'Expand/collapse todo description'				],
 					[ 'c',					 'Mark todos complete'							],
 					[ 'C',					 'Toggle current todo complete/todo'			],
-					[ 'R',					 'Mark todos incomplete'						],
+					[ 'R',					 'Toggle current todo incomplete'			],
+					[ 'r',					 'Mark todos incomplete'						],
 					[ 'W / ~',				 'Mark todo waiting'							],
 					[ 'B / =',				 'Mark current todo as blocked'					],
 					[ 'A',					 'Add a new todo'								],

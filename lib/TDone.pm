@@ -675,13 +675,13 @@ sub cmd_kill {
 	printf "Deleted %d todo(s)\n", scalar @removed;
 }
 
-sub cmd_done {
+sub cmd_complete {
 	my $usage = 'Usage: complete [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-r|-w] <query>';
 	my @args = @_;
-	my %opts = parse_opts('arxwp:t:A:B:', \@args, $usage);
+	my %opts = parse_opts('arwp:t:A:B:', \@args, $usage);
 	my $query = join(' ', @args);
 	die $usage unless $query;
-	my $undo = $opts{r} || $opts{x};
+	my $undo = $opts{r};
 	my $new_status = $undo ? 'todo' : $opts{w} ? 'waiting' : 'done';
 	my @todos = load_todos();
 	my @list_args;
@@ -824,9 +824,7 @@ our %CMD = (
 	list		=> \&cmd_list,
 	ls			=> \&cmd_list,		# alias — excluded from prefix matching
 	kill		=> \&cmd_kill,
-	complete	=> \&cmd_done,
-	c			=> \&cmd_done,		# alias — excluded from prefix matching
-	x			=> \&cmd_done,		# alias — excluded from prefix matching
+	complete	=> \&cmd_complete,
 	waiting		=> \&cmd_waiting,
 	edit		=> \&cmd_edit,
 	modify		=> \&cmd_modify,
@@ -835,7 +833,7 @@ our %CMD = (
 
 # Commands that are pure aliases; they match exactly but are not used for
 # prefix expansion so that e.g. 'l' unambiguously expands to 'list'.
-our %ALIASES = (ls => 1, c => 1, x => 1);
+our %ALIASES = (ls => 1);
 
 sub dispatch_command {
 	my @args = @_;
