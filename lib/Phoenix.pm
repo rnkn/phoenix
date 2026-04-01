@@ -265,7 +265,7 @@ sub display_status {
 			}
 		}
 	}
-	my $s = $t->{status} // 'task';
+	my $s = $t->{status} // 'todo';
 	return '[X]' if $s eq 'done';
 	return '[~]' if $s eq 'waiting';
 	# Repeating task (cron timespec in scheduled or due)
@@ -414,7 +414,7 @@ sub task_to_yaml_hash {
 	my ($t) = @_;
 	return {
 		title		=> $t->{title}		 // '',
-		status		=> $t->{status}		 // 'task',
+		status		=> $t->{status}		 // 'todo',
 		project		=> $t->{project}	 // '',
 		scheduled	=> $t->{scheduled}	 // '',
 		due			=> $t->{due}		 // '',
@@ -493,7 +493,7 @@ sub cmd_add {
 	my @tasks  = load_tasks();
 	my %task   = (
 		id			=> next_id(@tasks),
-		status		=> $opt_w ? 'waiting' : 'task',
+		status		=> $opt_w ? 'waiting' : 'todo',
 		project		=> $fields{project},
 		title		=> $fields{title},
 		scheduled	=> $opt_s,
@@ -682,7 +682,7 @@ sub cmd_complete {
 	my $query = join(' ', @args);
 	die $usage unless $query;
 	my $undo = $opts{r};
-	my $new_status = $undo ? 'task' : $opts{w} ? 'waiting' : 'done';
+	my $new_status = $undo ? 'todo' : $opts{w} ? 'waiting' : 'done';
 	my @tasks = load_tasks();
 	my @list_args;
 	push @list_args, '-a' if $opts{a};
