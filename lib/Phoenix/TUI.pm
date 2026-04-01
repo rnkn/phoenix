@@ -1,4 +1,4 @@
-package TDone::TUI;
+package Phoenix::TUI;
 use strict;
 use warnings;
 use open qw(:std :utf8);
@@ -6,7 +6,7 @@ use List::Util qw(max min);
 use Term::ReadKey;
 use Term::ReadLine::Tiny;
 
-use TDone qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS);
+use Phoenix qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS);
 
 use constant {
 	CLEAR	 => "\033[2J\033[H",
@@ -66,9 +66,9 @@ sub tui_prompt {
 }
 
 sub tui_draw {
-	my ($rows, $cols, $row_map, $cur, $scroll, $search_hl, $todos_by_id) = @_;
+	my ($rows, $cols, $row_map, $cur, $scroll, $search_hl, $tasks_by_id) = @_;
 	print CLEAR;
-	my ($title_w, $hdr) = TDone::table_layout($cols);
+	my ($title_w, $hdr) = Phoenix::table_layout($cols);
 	print BOLD, $hdr, RESET, "\n";
 	print "\x{2500}" x $cols, "\n";
 
@@ -78,7 +78,7 @@ sub tui_draw {
 	for my $i ($scroll .. $scroll + $visible - 1) {
 		last if $i >= @$row_map;
 		my $rm	   = $row_map->[$i];
-		my $t	   = $rm->{todo};
+		my $t	   = $rm->{task};
 		my $is_cur = ($i == $cur);
 		my $pfx	   = $is_cur ? REVERSE : '';
 		my $sfx	   = $is_cur ? RESET   : '';
@@ -88,7 +88,7 @@ sub tui_draw {
 			$desc =~ s/\n/ | /g;
 			printf "%s	  %-*s%s\n", $pfx, $cols - 5, substr($desc, 0, $cols - 5), $sfx;
 		} else {
-			my $status = TDone::display_status($t, $todos_by_id);
+			my $status = Phoenix::display_status($t, $tasks_by_id);
 			my $star   = $t->{description} ? '*' : ' ';
 			my $title  = substr($t->{title} // '', 0, $title_w);
 
@@ -102,7 +102,7 @@ sub tui_draw {
 					$t->{id} // '', substr($status, 0, $W_STATUS),
 					substr($t->{project} // '', 0, $W_PROJECT),
 					$ht_padded,
-					TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
+					Phoenix::fmt_date($t->{scheduled}), Phoenix::fmt_date($t->{due}),
 					substr($t->{priority} // '', 0, $W_PRI),
 					substr($t->{tags} // '', 0, $W_TAGS),
 					$star, $sfx;
@@ -112,7 +112,7 @@ sub tui_draw {
 					$t->{id} // '', substr($status, 0, $W_STATUS),
 					substr($t->{project} // '', 0, $W_PROJECT),
 					$title_w, $title,
-					TDone::fmt_date($t->{scheduled}), TDone::fmt_date($t->{due}),
+					Phoenix::fmt_date($t->{scheduled}), Phoenix::fmt_date($t->{due}),
 					substr($t->{priority} // '', 0, $W_PRI),
 					substr($t->{tags} // '', 0, $W_TAGS),
 					$star, $sfx;
@@ -130,7 +130,7 @@ sub search_indices {
 	for my $i (0 .. $#$row_map) {
 		my $rm = $row_map->[$i];
 		next if $rm->{type} eq 'desc';
-		my $t = $rm->{todo};
+		my $t = $rm->{task};
 		if (index(lc($t->{title}	   // ''), $sl) >= 0 ||
 			index(lc($t->{description} // ''), $sl) >= 0) {
 			push @matches, $i;
@@ -157,16 +157,16 @@ sub cmd_ui {
 			my ($cols, $rows) = GetTerminalSize();
 			$cols //= 80; $rows //= 24;
 
-			my @all_todos	= TDone::load_todos();
-			my %todos_by_id = map { $_->{id} => $_ } @all_todos;
-			my @disp = TDone::get_list_todos(@list_args);
+			my @all_tasks	= Phoenix::load_tasks();
+			my %tasks_by_id = map { $_->{id} => $_ } @all_tasks;
+			my @disp = Phoenix::get_list_tasks(@list_args);
 
-			# Build row map (todo rows + optional expanded description rows)
+			# Build row map (task rows + optional expanded description rows)
 			my @row_map;
 			for my $t (@disp) {
-				push @row_map, { todo => $t, type => 'todo' };
+				push @row_map, { task => $t, type => 'task' };
 				if ($expanded{$t->{id} // 0} && $t->{description}) {
-					push @row_map, { todo => $t, type => 'desc' };
+					push @row_map, { task => $t, type => 'desc' };
 				}
 			}
 
@@ -182,7 +182,7 @@ sub cmd_ui {
 			$scroll = 0						  if $scroll < 0;
 
 			tui_draw($rows, $cols, \@row_map, $cur, $scroll,
-					 $search, \%todos_by_id);
+					 $search, \%tasks_by_id);
 
 			my @key = tui_read_key();
 			my $k	= $key[0] // '';
@@ -230,33 +230,33 @@ sub cmd_ui {
 
 			# ---- Enter: expand/collapse description ----
 			elsif ($k eq "\r" || $k eq "\n" || $k eq "\x0d") {
-				if (@row_map && $row_map[$cur]{type} eq 'todo') {
-					my $tid = $row_map[$cur]{todo}{id} // 0;
+				if (@row_map && $row_map[$cur]{type} eq 'task') {
+					my $tid = $row_map[$cur]{task}{id} // 0;
 					if ($expanded{$tid}) { delete $expanded{$tid}; }
 					else				 { $expanded{$tid} = 1;	   }
 				}
 			}
 
-			# ---- C: immediately toggle complete state of current todo ----
+			# ---- C: immediately toggle complete state of current task ----
 			elsif ($k eq 'C') {
 				if (@row_map) {
-					my $tid	   = $row_map[$cur]{todo}{id} // 0;
-					my $status = $row_map[$cur]{todo}{status} // '';
+					my $tid	   = $row_map[$cur]{task}{id} // 0;
+					my $status = $row_map[$cur]{task}{status} // '';
 					if ($status eq 'done') {
-						eval { TDone::dispatch_command('complete', '-r', $tid) };
+						eval { Phoenix::dispatch_command('complete', '-r', $tid) };
 					} else {
-						eval { TDone::dispatch_command('complete', $tid) };
+						eval { Phoenix::dispatch_command('complete', $tid) };
 					}
 					warn $@ if $@;
 				}
 			}
 
-			# ---- c: open prompt to mark a query of todos complete ----
+			# ---- c: open prompt to mark a query of tasks complete ----
 			elsif ($k eq 'c') {
 				my $prefill	 = 'complete ';
 				my $cmd_line = tui_prompt($rows, ':', $prefill);
 				if ($cmd_line) {
-					eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+					eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 					warn $@ if $@;
 				}
 			}
@@ -264,46 +264,46 @@ sub cmd_ui {
 			# ---- W: mark waiting via command prompt ----
 			elsif ($k eq 'W' || $k eq '~') {
 				if (@row_map) {
-					my $tid = $row_map[$cur]{todo}{id} // 0;
+					my $tid = $row_map[$cur]{task}{id} // 0;
 					my $cmd_line = tui_prompt($rows, ':', "waiting $tid");
 					if ($cmd_line) {
-						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+						eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
 					}
 				}
 			}
 
-			# ---- B: block current todo by a query of todos ----
+			# ---- B: block current task by a query of tasks ----
 			elsif ($k eq 'B' || $k eq '=') {
 				if (@row_map) {
-					my $todo	= $row_map[$cur]{todo};
-					my $tid		= $todo->{id} // 0;
-					my @existing = grep { /\S/ } split(/\s+/, $todo->{blocked_by} // '');
+					my $task	= $row_map[$cur]{task};
+					my $tid		= $task->{id} // 0;
+					my @existing = grep { /\S/ } split(/\s+/, $task->{blocked_by} // '');
 					my $prefill = "block $tid";
 					$prefill .= " " . join(' ', @existing) if @existing;
 					my $cmd_line = tui_prompt($rows, ':', $prefill);
 					if ($cmd_line) {
-						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+						eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
 					}
 				}
 			}
 
-			# ---- R: immediately toggle incomplete state of current todo ----
+			# ---- R: immediately toggle incomplete state of current task ----
 			elsif ($k eq 'R') {
 				if (@row_map) {
-					my $tid = $row_map[$cur]{todo}{id} // 0;
-					eval { TDone::dispatch_command('complete', '-r', $tid) };
+					my $tid = $row_map[$cur]{task}{id} // 0;
+					eval { Phoenix::dispatch_command('complete', '-r', $tid) };
 					warn $@ if $@;
 				}
 			}
 
-			# ---- r: open prompt to mark a query of todos incomplete ----
+			# ---- r: open prompt to mark a query of tasks incomplete ----
 			elsif ($k eq 'r') {
 				my $prefill	 = 'complete -r ';
 				my $cmd_line = tui_prompt($rows, ':', $prefill);
 				if ($cmd_line) {
-					eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+					eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 					warn $@ if $@;
 				}
 			}
@@ -311,10 +311,10 @@ sub cmd_ui {
 			# ---- S: set scheduled date via command prompt ----
 			elsif ($k eq 'S') {
 				if (@row_map) {
-					my $tid = $row_map[$cur]{todo}{id} // 0;
+					my $tid = $row_map[$cur]{task}{id} // 0;
 					my $cmd_line = tui_prompt($rows, ':', "modify $tid -s ");
 					if ($cmd_line) {
-						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+						eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
 					}
 				}
@@ -323,22 +323,22 @@ sub cmd_ui {
 			# ---- D: set due date via command prompt ----
 			elsif ($k eq 'D') {
 				if (@row_map) {
-					my $tid = $row_map[$cur]{todo}{id} // 0;
+					my $tid = $row_map[$cur]{task}{id} // 0;
 					my $cmd_line = tui_prompt($rows, ':', "modify $tid -d ");
 					if ($cmd_line) {
-						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+						eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
 					}
 				}
 			}
 
-			# ---- K: kill (delete) current todo via command prompt ----
+			# ---- K: kill (delete) current task via command prompt ----
 			elsif ($k eq 'K') {
 				if (@row_map) {
-					my $tid = $row_map[$cur]{todo}{id} // 0;
+					my $tid = $row_map[$cur]{task}{id} // 0;
 					my $cmd_line = tui_prompt($rows, ':', "kill $tid");
 					if ($cmd_line) {
-						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+						eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
 						$cur-- if $cur > 0 && $cur >= $#row_map;
 					}
@@ -348,11 +348,11 @@ sub cmd_ui {
 			# ---- +: add tag via command prompt (modify <id> -t <tag>) ----
 			elsif ($k eq '+') {
 				if (@row_map) {
-					my $tid		= $row_map[$cur]{todo}{id} // 0;
+					my $tid		= $row_map[$cur]{task}{id} // 0;
 					my $prefill = "modify $tid -t ";
 					my $cmd_line = tui_prompt($rows, ':', $prefill);
 					if ($cmd_line) {
-						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+						eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
 					}
 				}
@@ -361,11 +361,11 @@ sub cmd_ui {
 			# ---- -: remove tag via command prompt (modify <id> -T <tag>) ----
 			elsif ($k eq '-') {
 				if (@row_map) {
-					my $tid		= $row_map[$cur]{todo}{id} // 0;
+					my $tid		= $row_map[$cur]{task}{id} // 0;
 					my $prefill = "modify $tid -T ";
 					my $cmd_line = tui_prompt($rows, ':', $prefill);
 					if ($cmd_line) {
-						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+						eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
 					}
 				}
@@ -374,11 +374,11 @@ sub cmd_ui {
 			# ---- ^: set project via command prompt (modify <id> -p <project>) ----
 			elsif ($k eq '^') {
 				if (@row_map) {
-					my $tid		= $row_map[$cur]{todo}{id} // 0;
+					my $tid		= $row_map[$cur]{task}{id} // 0;
 					my $prefill = "modify $tid -p ";
 					my $cmd_line = tui_prompt($rows, ':', $prefill);
 					if ($cmd_line) {
-						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+						eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
 					}
 				}
@@ -387,33 +387,33 @@ sub cmd_ui {
 			# ---- e: edit in $EDITOR via command prompt ----
 			elsif ($k eq 'e') {
 				if (@row_map) {
-					my $tid = $row_map[$cur]{todo}{id} // 0;
+					my $tid = $row_map[$cur]{task}{id} // 0;
 					my $cmd_line = tui_prompt($rows, ':', "edit $tid");
 					if ($cmd_line) {
 						ReadMode('normal');
-						eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+						eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 						warn $@ if $@;
 						ReadMode('raw');
 					}
 				}
 			}
 
-			# ---- E: immediately edit current todo in $EDITOR (no prompt) ----
+			# ---- E: immediately edit current task in $EDITOR (no prompt) ----
 			elsif ($k eq 'E') {
 				if (@row_map) {
-					my $tid = $row_map[$cur]{todo}{id} // 0;
+					my $tid = $row_map[$cur]{task}{id} // 0;
 					ReadMode('normal');
-					eval { TDone::dispatch_command('edit', $tid) };
+					eval { Phoenix::dispatch_command('edit', $tid) };
 					warn $@ if $@;
 					ReadMode('raw');
 				}
 			}
 
-			# ---- A: add a new todo via command prompt ----
+			# ---- A: add a new task via command prompt ----
 			elsif ($k eq 'A') {
 				my $cmd_line = tui_prompt($rows, ':', 'add ');
 				if ($cmd_line) {
-					eval { TDone::dispatch_command(split(/\s+/, $cmd_line)) };
+					eval { Phoenix::dispatch_command(split(/\s+/, $cmd_line)) };
 					warn $@ if $@;
 				}
 			}
@@ -498,20 +498,20 @@ sub cmd_ui {
 						$scroll = 0;
 					} elsif ($verb eq 'edit') {
 						ReadMode('normal');
-						eval { TDone::dispatch_command(@parts) };
+						eval { Phoenix::dispatch_command(@parts) };
 						warn $@ if $@;
 						ReadMode('raw');
 					} else {
-						eval { TDone::dispatch_command(@parts) };
+						eval { Phoenix::dispatch_command(@parts) };
 						warn $@ if $@;
 					}
 				}
 			}
 
-			# ---- ): narrow to current todo's project (-p flag) ----
+			# ---- ): narrow to current task's project (-p flag) ----
 			elsif ($k eq '(') {
 				if (@row_map) {
-					my $proj = $row_map[$cur]{todo}{project} // '';
+					my $proj = $row_map[$cur]{task}{project} // '';
 					@list_args = ($proj ? ('-p', $proj) : ());
 					$cur	= 0;
 					$scroll = 0;
@@ -539,22 +539,22 @@ sub cmd_ui {
 					[ 'u / ^U',				 'Scroll half screen up'						],
 					[ 'SPC / ^V / f / ^F',	 'Scroll full screen down'						],
 					[ 'b / ^B / ESC-v',		 'Scroll full screen up'						],
-					[ 'RET',				 'Expand/collapse todo description'				],
-					[ 'c',					 'Mark todos complete'							],
-					[ 'C',					 'Toggle current todo complete/todo'			],
-					[ 'R',					 'Toggle current todo incomplete'			],
-					[ 'r',					 'Mark todos incomplete'						],
-					[ 'W / ~',				 'Mark todo waiting'							],
-					[ 'B / =',				 'Mark current todo as blocked'					],
-					[ 'A',					 'Add a new todo'								],
-					[ 'K',					 'Kill (delete) current todo'					],
+					[ 'RET',				 'Expand/collapse task description'				],
+					[ 'c',					 'Mark tasks complete'							],
+					[ 'C',					 'Toggle current task complete/incomplete'		],
+					[ 'R',					 'Toggle current task incomplete'			],
+					[ 'r',					 'Mark tasks incomplete'						],
+					[ 'W / ~',				 'Mark task waiting'							],
+					[ 'B / =',				 'Mark current task as blocked'					],
+					[ 'A',					 'Add a new task'								],
+					[ 'K',					 'Kill (delete) current task'					],
 					[ 'D',					 'Set due date (timespec)'						],
 					[ 'S',					 'Set scheduled date (timespec)'				],
-					[ '+',					 'Add tag to current todo'						],
+					[ '+',					 'Add tag to current task'						],
 					[ '-',					 'Remove tag from current'						],
-					[ '^',					 'Set project of current todo'					],
-					[ 'e',					 'Edit todos in $EDITOR'						],
-					[ 'E',					 'Edit current todo immediately in $EDITOR'		],
+					[ '^',					 'Set project of current task'					],
+					[ 'e',					 'Edit tasks in $EDITOR'						],
+					[ 'E',					 'Edit current task immediately in $EDITOR'		],
 					[ '/',					 'Search forward'								],
 					[ '?',					 'Search backward'								],
 					[ 'n',					 'Next search match'							],
@@ -570,7 +570,7 @@ sub cmd_ui {
 					[ 'q / ^C',				 'Quit'											],
 				);
 				my $kw = max(map { length($_->[0]) } @bindings);
-				print "tdone TUI key bindings:\n\n";
+				print "phx TUI key bindings:\n\n";
 				printf "  %-*s	%s\n", $kw, $_->[0], $_->[1] for @bindings;
 				print "\nPress any key...\n";
 				ReadMode('raw');
