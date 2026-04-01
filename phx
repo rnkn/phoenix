@@ -3,6 +3,6 @@ use strict;
 use warnings;
 use FindBin qw($Bin);
 use lib "$Bin/lib", "$Bin/local/lib/perl5";
-use TDone;
+use Phoenix;
 
-TDone::run(@ARGV);
+Phoenix::run(@ARGV);
