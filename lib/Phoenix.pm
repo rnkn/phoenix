@@ -446,21 +446,25 @@ sub edit_task_yaml {
 }
 
 # ============================================================
-# PARSE TASK STRING	 (+tag	^project  title words)
+# PARSE TASK STRING	 (+tag	^project  =id  id=  title words)
 # ============================================================
 
 sub parse_task_string {
 	my ($str) = @_;
-	my (@tags, $project, @words);
+	my (@tags, $project, @blocked_by_ids, @blocks_ids, @words);
 	for my $w (split /\s+/, $str) {
-		if	  ($w =~ /^\+(.+)$/) { push @tags, $1; }
-		elsif ($w =~ /^\^(.+)$/) { $project = $1; }
-		else					 { push @words, $w; }
+		if    ($w =~ /^\+(.+)$/)        { push @tags, $1; }
+		elsif ($w =~ /^\^(.+)$/)        { $project = $1; }
+		elsif ($w =~ /^=([1-9]\d*)$/)  { push @blocked_by_ids, $1; }
+		elsif ($w =~ /^([1-9]\d*)=$/)  { push @blocks_ids, $1; }
+		else                            { push @words, $w; }
 	}
 	return (
-		title	=> join(' ', @words),
-		project => $project // '',
-		tags	=> join(' ', @tags),
+		title			=> join(' ', @words),
+		project			=> $project // '',
+		tags			=> join(' ', @tags),
+		blocked_by_ids	=> \@blocked_by_ids,
+		blocks_ids		=> \@blocks_ids,
 	);
 }
 
@@ -469,9 +473,9 @@ sub parse_task_string {
 # ============================================================
 
 sub cmd_add {
-	my $usage = 'Usage: add [-e] [-d <timepsace>] [-s <timespec>] [-w] [-m <description>] [!,!!,!!!] [^<project>] [+<tag>]... <title>';
+	my $usage = 'Usage: add [-e] [-d <timespec>] [-s <timespec>] [-w] [-m <description>] [-p <project>] [-t <tag>]... [-b <task_id>]... [-B <task_id>]... [!,!!,!!!] [^<project>] [+<tag>]... [=<task_id>]... [<task_id>=]... <title>';
 	my @args = @_;
-	my %opts = parse_opts('ed:s:wm:', \@args, $usage);
+	my %opts = parse_opts('ed:s:wm:p:t:b:B:', \@args, $usage);
 	my $opt_e = $opts{e} ? 1 : 0;
 	my $opt_d = defined $opts{d} ? parse_timespec($opts{d}[-1]) : '';
 	my $opt_s = defined $opts{s} ? parse_timespec($opts{s}[-1]) : '';
@@ -482,6 +486,18 @@ sub cmd_add {
 
 	my %fields = parse_task_string($str);
 	die $usage unless $fields{title};
+
+	# -p flag overrides ^project inline syntax; -t flag merges with +tag inline syntax
+	my $project = $opts{p} ? $opts{p}[-1] : $fields{project};
+	my @flag_tags = @{$opts{t} // []};
+	my @inline_tags = $fields{tags} ? split(/\s+/, $fields{tags}) : ();
+	my %seen_tags;
+	my @all_tags = grep { !$seen_tags{$_}++ } (@flag_tags, @inline_tags);
+
+	# Collect blocked_by IDs from -b flag and =<id> inline syntax
+	my @blocked_by_ids = (@{$fields{blocked_by_ids}}, @{$opts{b} // []});
+	# Collect blocks IDs (tasks to be blocked by new task) from -B flag and <id>= inline syntax
+	my @blocks_ids = (@{$fields{blocks_ids}}, @{$opts{B} // []});
 
 	my $priority = '';
 	if ($fields{title} =~ s/(?:\s+|^)(!!!|!!|!)(?:\s+|$)/ /) {
@@ -494,17 +510,30 @@ sub cmd_add {
 	my %task   = (
 		id			=> next_id(@tasks),
 		status		=> $opt_w ? 'waiting' : 'todo',
-		project		=> $fields{project},
+		project		=> $project,
 		title		=> $fields{title},
 		scheduled	=> $opt_s,
 		due			=> $opt_d,
 		priority	=> $priority,
-		blocked_by	=> '',
-		tags		=> $fields{tags},
+		blocked_by	=> join(' ', @blocked_by_ids),
+		tags		=> join(' ', @all_tags),
 		description => $opt_m,
 	);
 	edit_task_yaml(\%task) if $opt_e;
 	push @tasks, \%task;
+
+	# Update tasks that should be blocked by the new task
+	if (@blocks_ids) {
+		my %blocks_set = map { $_ => 1 } @blocks_ids;
+		for my $t (@tasks) {
+			next unless $blocks_set{$t->{id} // ''};
+			my @existing = grep { /\S/ } split(/\s+/, $t->{blocked_by} // '');
+			unless (grep { $_ eq $task{id} } @existing) {
+				$t->{blocked_by} = join(' ', @existing, $task{id});
+			}
+		}
+	}
+
 	save_tasks(@tasks);
 	printf "Added task %d: %s\n", $task{id}, $task{title};
 }
@@ -573,17 +602,19 @@ sub cmd_block {
 }
 
 sub get_list_tasks {
-	my $usage = 'Usage: list [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>';
 	my @args = @_;
-	my %opts = parse_opts('axwA:B:t:p:', \@args, $usage);
-	my ($opt_a, $opt_x, $opt_w) = ($opts{a}, $opts{x}, $opts{w});
-	my ($opt_A, $opt_B) = (defined $opts{A} ? $opts{A}[-1] : undef, defined $opts{B} ? $opts{B}[-1] : undef);
+	my %opts = parse_opts_raw('acwRbBp:t:T:P:A:F:', \@args);
+	my ($opt_a, $opt_c, $opt_w, $opt_R, $opt_b, $opt_B) = @opts{qw(a c w R b B)};
+	my ($opt_A, $opt_F) = (defined $opts{A} ? $opts{A}[-1] : undef, defined $opts{F} ? $opts{F}[-1] : undef);
 	my @filter_tags		= @{$opts{t} // []};
 	my @filter_projects = @{$opts{p} // []};
+	my @omit_tags		= @{$opts{T} // []};
+	my @omit_projects	= @{$opts{P} // []};
 	my $query = join(' ', @args);
 	my @tasks = load_tasks();
+	my %by_id = map { $_->{id} => $_ } @tasks;
 	my @show;
-	if ($opt_x) {
+	if ($opt_c) {
 		@show = grep { ($_->{status} // '') eq 'done' } @tasks;
 	} elsif ($opt_w) {
 		@show = grep { ($_->{status} // '') eq 'waiting' } @tasks;
@@ -592,7 +623,7 @@ sub get_list_tasks {
 	} else {
 		@show = grep { ($_->{status} // '') ne 'done' } @tasks;
 	}
-	if (defined $opt_A || defined $opt_B) {
+	if (defined $opt_A || defined $opt_F) {
 		my $today = strftime('%Y-%m-%d', localtime);
 		my $upper;
 		my $lower;
@@ -605,19 +636,19 @@ sub get_list_tasks {
 				$upper = parse_timespec($opt_A) || $today;
 			}
 		}
-		if (defined $opt_B) {
-			if ($opt_B =~ /^\d+$/) {
-				$lower = strftime('%Y-%m-%d', localtime(time - ($opt_B * 86400)));
+		if (defined $opt_F) {
+			if ($opt_F =~ /^\d+$/) {
+				$lower = strftime('%Y-%m-%d', localtime(time - ($opt_F * 86400)));
 			} else {
-				$lower = parse_timespec($opt_B) || $today;
+				$lower = parse_timespec($opt_F) || $today;
 			}
 		}
-		if (defined $opt_A && defined $opt_B) {
-			# cumulative window from -B date to -A date
+		if (defined $opt_A && defined $opt_F) {
+			# cumulative window from -F date to -A date
 		} elsif (defined $opt_A) {
 			# No lower bound — include overdue/previously scheduled tasks
 		} else {
-			# with only -B, use a single-day window at the -B date
+			# with only -F, use a single-day window at the -F date
 			$upper = $lower;
 		}
 		($lower, $upper) = ($upper, $lower) if defined($lower) && defined($upper) && $lower gt $upper;
@@ -628,7 +659,16 @@ sub get_list_tasks {
 			($due	=~ /^\d{4}/ && (!defined $lower || $due   ge $lower) && $due	  le $upper)
 		} @show;
 	}
-	# -x <tag> filters (AND): all specified tags must be present
+	# -R: omit repeating tasks (cron expression in scheduled or due)
+	@show = grep { !is_cron_expr($_->{scheduled}) && !is_cron_expr($_->{due}) } @show if $opt_R;
+	# -b: show only blocked tasks; -B: omit blocked tasks
+	my $_is_blocked = sub {
+		my @ids = grep { /\S/ } split(/\s+/, $_[0]{blocked_by} // '');
+		@ids && grep { !$by_id{$_} || ($by_id{$_}{status} // '') ne 'done' } @ids;
+	};
+	@show = grep { $_is_blocked->($_) } @show if $opt_b;
+	@show = grep { !$_is_blocked->($_) } @show if $opt_B;
+	# -t <tag> filters (AND): all specified tags must be present
 	for my $tag (@filter_tags) {
 		my $tl = lc $tag;
 		@show = grep {
@@ -636,10 +676,23 @@ sub get_list_tasks {
 			exists $task_tags{$tl}
 		} @show;
 	}
+	# -T <tag> filters: omit tasks that have the tag
+	for my $tag (@omit_tags) {
+		my $tl = lc $tag;
+		@show = grep {
+			my %task_tags = map { lc($_) => 1 } split(/\s+/, $_->{tags} // '');
+			!exists $task_tags{$tl}
+		} @show;
+	}
 	# -p <project> filters (OR): task must belong to one of the specified projects
 	if (@filter_projects) {
 		my %proj_set = map { lc($_) => 1 } @filter_projects;
 		@show = grep { $proj_set{lc($_->{project} // '')} } @show;
+	}
+	# -P <project> filters: omit tasks from these projects
+	if (@omit_projects) {
+		my %omit_set = map { lc($_) => 1 } @omit_projects;
+		@show = grep { !$omit_set{lc($_->{project} // '')} } @show;
 	}
 	# Text query searches title and description only
 	if ($query) {
@@ -657,14 +710,67 @@ sub get_list_tasks {
 }
 
 sub cmd_list {
-	my $usage = 'Usage: list [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>';
-	print_table(get_list_tasks(@_));
+	my $usage = 'Usage: list [-p <project>]... [-t <tag>]... [-T <tag>]... [-P <project>]... [-A <timespec>] [-F <timespec>] [-a|-c|-w] [-R] [-b|-B] [-v] <query>';
+	my @args = @_;
+	my %opts = parse_opts('acwRvbBp:t:T:P:A:F:', \@args, $usage);
+	my @list_args;
+	push @list_args, '-a' if $opts{a};
+	push @list_args, '-c' if $opts{c};
+	push @list_args, '-w' if $opts{w};
+	push @list_args, '-R' if $opts{R};
+	push @list_args, '-b' if $opts{b};
+	push @list_args, '-B' if $opts{B};
+	push @list_args, map { ('-p', $_) } @{$opts{p} // []};
+	push @list_args, map { ('-t', $_) } @{$opts{t} // []};
+	push @list_args, map { ('-T', $_) } @{$opts{T} // []};
+	push @list_args, map { ('-P', $_) } @{$opts{P} // []};
+	push @list_args, map { ('-A', $_) } @{$opts{A} // []};
+	push @list_args, map { ('-F', $_) } @{$opts{F} // []};
+	push @list_args, @args;
+	my @tasks = get_list_tasks(@list_args);
+	if ($opts{v}) {
+		my $cols = 80;
+		eval { ($cols) = GetTerminalSize() };
+		my @all_tasks = load_tasks();
+		my %by_id = map { $_->{id} => $_ } @all_tasks;
+		# Build map from task id to list of its subtasks (tasks blocked by it)
+		my %subtasks;
+		for my $t (@all_tasks) {
+			for my $pid (grep { /\S/ } split(/\s+/, $t->{blocked_by} // '')) {
+				push @{$subtasks{$pid}}, $t;
+			}
+		}
+		my ($title_w, $hdr, $row_fmt) = table_layout($cols);
+		print $hdr, "\n";
+		print "\x{2500}" x $cols, "\n";
+		for my $t (@tasks) {
+			my $desc_star = $t->{description} ? '*' : ' ';
+			printf $row_fmt,
+				$t->{id} // '',
+				substr(display_status($t, \%by_id), 0, $W_STATUS),
+				substr($t->{project} // '', 0, $W_PROJECT),
+				$title_w, substr($t->{title} // '', 0, $title_w),
+				fmt_date($t->{scheduled}),
+				fmt_date($t->{due}),
+				substr($t->{priority} // '', 0, $W_PRI),
+				substr($t->{tags} // '', 0, $W_TAGS),
+				$desc_star;
+			for my $st (@{$subtasks{$t->{id} // 0} // []}) {
+				printf "    %-4s %s\n", $st->{id} // '', $st->{title} // '';
+			}
+			if ($t->{description}) {
+				printf "    %s\n", $_ for split(/\n/, $t->{description});
+			}
+		}
+	} else {
+		print_table(@tasks);
+	}
 }
 
 sub cmd_kill {
-	my $usage = 'Usage: kill [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>';
+	my $usage = 'Usage: kill [-p <project>]... [-t <tag>]... [-T <tag>]... [-P <project>]... [-A <timespec>] [-F <timespec>] [-a|-c|-w] [-R] [-b|-B] <query>';
 	my @args = @_;
-	parse_opts('axwA:B:t:p:', \@args, $usage);
+	parse_opts('acwRbBp:t:T:P:A:F:', \@args, $usage);
 	my $query = join(' ', @args);
 	die $usage unless $query;
 	my @tasks	= load_tasks();
@@ -676,9 +782,9 @@ sub cmd_kill {
 }
 
 sub cmd_complete {
-	my $usage = 'Usage: complete [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-r|-w] <query>';
+	my $usage = 'Usage: complete [-p <project>]... [-t <tag>]... [-T <tag>]... [-P <project>]... [-A <timespec>] [-F <timespec>] [-a|-r|-w] [-R] [-b|-B] <query>';
 	my @args = @_;
-	my %opts = parse_opts('arwp:t:A:B:', \@args, $usage);
+	my %opts = parse_opts('arwRbBp:t:T:P:A:F:', \@args, $usage);
 	my $query = join(' ', @args);
 	die $usage unless $query;
 	my $undo = $opts{r};
@@ -686,11 +792,16 @@ sub cmd_complete {
 	my @tasks = load_tasks();
 	my @list_args;
 	push @list_args, '-a' if $opts{a};
-	push @list_args, '-x' if $undo;
+	push @list_args, '-c' if $undo;
+	push @list_args, '-R' if $opts{R};
+	push @list_args, '-b' if $opts{b};
+	push @list_args, '-B' if $opts{B};
 	push @list_args, map { ('-p', $_) } @{$opts{p} // []};
 	push @list_args, map { ('-t', $_) } @{$opts{t} // []};
+	push @list_args, map { ('-T', $_) } @{$opts{T} // []};
+	push @list_args, map { ('-P', $_) } @{$opts{P} // []};
 	push @list_args, map { ('-A', $_) } @{$opts{A} // []};
-	push @list_args, map { ('-B', $_) } @{$opts{B} // []};
+	push @list_args, map { ('-F', $_) } @{$opts{F} // []};
 	push @list_args, @args;
 	my @candidate_tasks = get_list_tasks(@list_args);
 	my %candidate = map { $_->{id} => 1 } @candidate_tasks;
@@ -793,9 +904,9 @@ sub cmd_tag {
 }
 
 sub cmd_flush {
-	my $usage = 'Usage: flush [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>';
+	my $usage = 'Usage: flush [-p <project>]... [-t <tag>]... [-T <tag>]... [-P <project>]... [-A <timespec>] [-F <timespec>] [-a|-c|-w] [-R] [-b|-B] <query>';
 	my @args = @_;
-	parse_opts('axwp:t:A:B:', \@args, $usage);
+	parse_opts('acwRbBp:t:T:P:A:F:', \@args, $usage);
 	my $query = join(' ', @args);
 	die $usage unless $query;
 	my @tasks = load_tasks();
@@ -828,7 +939,7 @@ our %CMD = (
 	waiting		=> \&cmd_waiting,
 	edit		=> \&cmd_edit,
 	modify		=> \&cmd_modify,
-	flush		=> \&cmd_flush,		# 'Usage: flush [-p <project>] [-t <tag>]... [-A <timespec>] [-B <timespec>] [-a|-x|-w] <query>'; delete matching done tasks and renumber remaining tasks from 1
+	flush		=> \&cmd_flush,		# 'Usage: flush [-p <project>]... [-t <tag>]... [-T <tag>]... [-P <project>]... [-A <timespec>] [-F <timespec>] [-a|-c|-w] [-R] [-b|-B] <query>'; delete matching done tasks and renumber remaining tasks from 1
 );
 
 # Commands that are pure aliases; they match exactly but are not used for
