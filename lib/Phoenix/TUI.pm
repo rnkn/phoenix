@@ -300,6 +300,15 @@ sub cmd_ui {
 				}
 			}
 
+			# ---- 1/2/3: immediately set priority of current task ----
+			elsif ($k eq '1' || $k eq '2' || $k eq '3') {
+				if (@row_map) {
+					my $tid = $row_map[$cur]{task}{id} // 0;
+					eval { Phoenix::dispatch_command('modify', "-$k", $tid) };
+					warn $@ if $@;
+				}
+			}
+
 			# ---- r: open prompt to mark a query of tasks incomplete ----
 			elsif ($k eq 'r') {
 				my $prefill	 = 'complete -r ';
@@ -546,6 +555,7 @@ sub cmd_ui {
 					[ 'C',					 'Toggle current task complete/incomplete'		],
 					[ 'R',					 'Toggle current task incomplete'			],
 					[ 'r',					 'Mark tasks incomplete'						],
+					[ '1 / 2 / 3',			 'Set priority of current task'					],
 					[ 'W / ~',				 'Mark task waiting'							],
 					[ 'B / =',				 'Mark current task as blocked'					],
 					[ 'A',					 'Add a new task'								],

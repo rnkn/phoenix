@@ -498,8 +498,21 @@ sub parse_task_string {
 # ============================================================
 
 sub cmd_add {
-	my $usage = 'Usage: add [-e] [-d <timespec>] [-s <timespec>] [-w] [-m <description>] [-p <project>] [-t <tag>]... [-b <task_id>]... [-B <task_id>]... [!,!!,!!!] [^<project>] [+<tag>]... [=<task_id>]... [<task_id>=]... <title>';
+	my $usage = 'Usage: add [-e] [-d <timespec>] [-s <timespec>] [-w] [-m <description>] [-p <project>] [-t <tag>]... [-b <task_id>]... [-B <task_id>]... [-0|-1|-2|-3] [!,!!,!!!] [^<project>] [+<tag>]... [=<task_id>]... [<task_id>=]... <title>';
 	my @args = @_;
+
+	# Extract numeric priority flags (-0, -1, -2, -3) before parse_opts
+	my $flag_priority = undef;
+	my @filtered_args;
+	for my $arg (@args) {
+		if    ($arg eq '-0') { $flag_priority = '';  }
+		elsif ($arg eq '-1') { $flag_priority = 1;   }
+		elsif ($arg eq '-2') { $flag_priority = 2;   }
+		elsif ($arg eq '-3') { $flag_priority = 3;   }
+		else                 { push @filtered_args, $arg; }
+	}
+	@args = @filtered_args;
+
 	my %opts = parse_opts('ed:s:wm:p:t:b:B:', \@args, $usage);
 	my $opt_e = $opts{e} ? 1 : 0;
 	my $opt_d = defined $opts{d} ? parse_timespec($opts{d}[-1]) : '';
@@ -530,6 +543,8 @@ sub cmd_add {
 		$priority = length($bang);
 		$fields{title} = join(' ', grep { length } split(/\s+/, $fields{title}));
 	}
+	# -1/-2/-3 flag overrides inline ! syntax
+	$priority = $flag_priority if defined $flag_priority;
 
 	my @tasks  = load_tasks();
 	my %task   = (
