@@ -6,7 +6,7 @@ use List::Util qw(max min);
 use Term::ReadKey;
 use Term::ReadLine::Tiny;
 
-use Phoenix qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS);
+use Phoenix qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS fmt_priority is_urgent);
 
 use constant {
 	CLEAR	 => "\033[2J\033[H",
@@ -80,8 +80,9 @@ sub tui_draw {
 		my $rm	   = $row_map->[$i];
 		my $t	   = $rm->{task};
 		my $is_cur = ($i == $cur);
-		my $pfx	   = $is_cur ? REVERSE : '';
-		my $sfx	   = $is_cur ? RESET   : '';
+		my $urgent = ($rm->{type} ne 'desc') && is_urgent($t);
+		my $pfx	   = ($urgent ? BOLD : '') . ($is_cur ? REVERSE : '');
+		my $sfx	   = ($urgent || $is_cur) ? RESET : '';
 
 		if ($rm->{type} eq 'desc') {
 			my $desc = $t->{description} // '';
@@ -94,7 +95,8 @@ sub tui_draw {
 
 			# Highlight search match in title
 			if ($search_hl && $title =~ /\Q$search_hl\E/i) {
-				(my $ht = $title) =~ s/(\Q$search_hl\E)/YELLOW.BOLD.$1.RESET.($is_cur ? REVERSE : '')/ige;
+				my $restore = $is_cur ? REVERSE : ($urgent ? BOLD : '');
+				(my $ht = $title) =~ s/(\Q$search_hl\E)/YELLOW.BOLD.$1.RESET.$restore/ige;
 				# Pad using the visible length of $title (before ANSI codes were added)
 				my $ht_padded = $ht . (' ' x max(0, $title_w - length($title)));
 				printf "%s%-${W_ID}s %-${W_STATUS}s %-${W_PROJECT}s %s %-${W_SCHED}.${W_SCHED}s %-${W_DUE}.${W_DUE}s %-${W_PRI}s %-${W_TAGS}s%s%s\n",
@@ -103,7 +105,7 @@ sub tui_draw {
 					substr($t->{project} // '', 0, $W_PROJECT),
 					$ht_padded,
 					Phoenix::fmt_date($t->{scheduled}), Phoenix::fmt_date($t->{due}),
-					substr($t->{priority} // '', 0, $W_PRI),
+					substr(fmt_priority($t->{priority}), 0, $W_PRI),
 					substr($t->{tags} // '', 0, $W_TAGS),
 					$star, $sfx;
 			} else {
@@ -113,7 +115,7 @@ sub tui_draw {
 					substr($t->{project} // '', 0, $W_PROJECT),
 					$title_w, $title,
 					Phoenix::fmt_date($t->{scheduled}), Phoenix::fmt_date($t->{due}),
-					substr($t->{priority} // '', 0, $W_PRI),
+					substr(fmt_priority($t->{priority}), 0, $W_PRI),
 					substr($t->{tags} // '', 0, $W_TAGS),
 					$star, $sfx;
 			}
@@ -294,6 +296,15 @@ sub cmd_ui {
 				if (@row_map) {
 					my $tid = $row_map[$cur]{task}{id} // 0;
 					eval { Phoenix::dispatch_command('complete', '-r', $tid) };
+					warn $@ if $@;
+				}
+			}
+
+			# ---- 1/2/3: immediately set priority of current task ----
+			elsif ($k eq '1' || $k eq '2' || $k eq '3') {
+				if (@row_map) {
+					my $tid = $row_map[$cur]{task}{id} // 0;
+					eval { Phoenix::dispatch_command('modify', "-$k", $tid) };
 					warn $@ if $@;
 				}
 			}
@@ -544,6 +555,7 @@ sub cmd_ui {
 					[ 'C',					 'Toggle current task complete/incomplete'		],
 					[ 'R',					 'Toggle current task incomplete'			],
 					[ 'r',					 'Mark tasks incomplete'						],
+					[ '1 / 2 / 3',			 'Set priority of current task'					],
 					[ 'W / ~',				 'Mark task waiting'							],
 					[ 'B / =',				 'Mark current task as blocked'					],
 					[ 'A',					 'Add a new task'								],

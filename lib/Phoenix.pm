@@ -11,7 +11,12 @@ use YAML::Tiny;
 use Term::ReadKey;
 
 our $VERSION = '0.1.0';
-our @EXPORT_OK = qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS);
+our @EXPORT_OK = qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS fmt_priority is_urgent);
+
+use constant {
+	BOLD  => "\033[1m",
+	RESET => "\033[0m",
+};
 
 # ============================================================
 # DATA FILE
@@ -372,6 +377,23 @@ sub fmt_date {
 	return $d;
 }
 
+sub fmt_priority {
+	my ($p) = @_;
+	return '' unless $p && $p =~ /^\d+$/;
+	my $n = $p > 3 ? 3 : $p;
+	return '!' x $n;
+}
+
+sub is_urgent {
+	my ($t) = @_;
+	my $today = strftime('%Y-%m-%d', localtime);
+	for my $field (qw(due scheduled)) {
+		my $d = fmt_date($t->{$field});
+		return 1 if $d && $d =~ /^\d{4}-\d{2}-\d{2}$/ && $d le $today;
+	}
+	return 0;
+}
+
 sub table_layout {
 	my ($terminal_cols) = @_;
 	my $fixed	= $W_ID + $W_STATUS + $W_PROJECT + $W_SCHED + $W_DUE + $W_PRI + $W_TAGS + 8;
@@ -393,6 +415,8 @@ sub print_table {
 	print "\x{2500}" x $cols, "\n";
 	for my $t (@tasks) {
 		my $desc_star = $t->{description} ? '*' : ' ';
+		my $urgent = is_urgent($t);
+		print BOLD if $urgent;
 		printf $row_fmt,
 			$t->{id} // '',
 			substr(display_status($t, \%by_id), 0, $W_STATUS),
@@ -400,9 +424,10 @@ sub print_table {
 			$title_w, substr($t->{title} // '', 0, $title_w),
 			fmt_date($t->{scheduled}),
 			fmt_date($t->{due}),
-			substr($t->{priority} // '', 0, $W_PRI),
+			substr(fmt_priority($t->{priority}), 0, $W_PRI),
 			substr($t->{tags} // '', 0, $W_TAGS),
 			$desc_star;
+		print RESET if $urgent;
 	}
 }
 
@@ -473,8 +498,21 @@ sub parse_task_string {
 # ============================================================
 
 sub cmd_add {
-	my $usage = 'Usage: add [-e] [-d <timespec>] [-s <timespec>] [-w] [-m <description>] [-p <project>] [-t <tag>]... [-b <task_id>]... [-B <task_id>]... [!,!!,!!!] [^<project>] [+<tag>]... [=<task_id>]... [<task_id>=]... <title>';
+	my $usage = 'Usage: add [-e] [-d <timespec>] [-s <timespec>] [-w] [-m <description>] [-p <project>] [-t <tag>]... [-b <task_id>]... [-B <task_id>]... [-0|-1|-2|-3] [!,!!,!!!] [^<project>] [+<tag>]... [=<task_id>]... [<task_id>=]... <title>';
 	my @args = @_;
+
+	# Extract numeric priority flags (-0, -1, -2, -3) before parse_opts
+	my $flag_priority = undef;
+	my @filtered_args;
+	for my $arg (@args) {
+		if    ($arg eq '-0') { $flag_priority = '';  }
+		elsif ($arg eq '-1') { $flag_priority = 1;   }
+		elsif ($arg eq '-2') { $flag_priority = 2;   }
+		elsif ($arg eq '-3') { $flag_priority = 3;   }
+		else                 { push @filtered_args, $arg; }
+	}
+	@args = @filtered_args;
+
 	my %opts = parse_opts('ed:s:wm:p:t:b:B:', \@args, $usage);
 	my $opt_e = $opts{e} ? 1 : 0;
 	my $opt_d = defined $opts{d} ? parse_timespec($opts{d}[-1]) : '';
@@ -505,6 +543,8 @@ sub cmd_add {
 		$priority = length($bang);
 		$fields{title} = join(' ', grep { length } split(/\s+/, $fields{title}));
 	}
+	# -1/-2/-3 flag overrides inline ! syntax
+	$priority = $flag_priority if defined $flag_priority;
 
 	my @tasks  = load_tasks();
 	my %task   = (
@@ -745,6 +785,8 @@ sub cmd_list {
 		print "\x{2500}" x $cols, "\n";
 		for my $t (@tasks) {
 			my $desc_star = $t->{description} ? '*' : ' ';
+			my $urgent = is_urgent($t);
+			print BOLD if $urgent;
 			printf $row_fmt,
 				$t->{id} // '',
 				substr(display_status($t, \%by_id), 0, $W_STATUS),
@@ -752,9 +794,10 @@ sub cmd_list {
 				$title_w, substr($t->{title} // '', 0, $title_w),
 				fmt_date($t->{scheduled}),
 				fmt_date($t->{due}),
-				substr($t->{priority} // '', 0, $W_PRI),
+				substr(fmt_priority($t->{priority}), 0, $W_PRI),
 				substr($t->{tags} // '', 0, $W_TAGS),
 				$desc_star;
+			print RESET if $urgent;
 			for my $st (@{$subtasks{$t->{id} // 0} // []}) {
 				printf "    %-4s %s\n", $st->{id} // '', $st->{title} // '';
 			}
