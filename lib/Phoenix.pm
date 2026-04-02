@@ -11,7 +11,12 @@ use YAML::Tiny;
 use Term::ReadKey;
 
 our $VERSION = '0.1.0';
-our @EXPORT_OK = qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS);
+our @EXPORT_OK = qw($W_ID $W_STATUS $W_PROJECT $W_SCHED $W_DUE $W_PRI $W_TAGS @TABLE_HEADERS fmt_priority is_urgent);
+
+use constant {
+	BOLD  => "\033[1m",
+	RESET => "\033[0m",
+};
 
 # ============================================================
 # DATA FILE
@@ -372,6 +377,23 @@ sub fmt_date {
 	return $d;
 }
 
+sub fmt_priority {
+	my ($p) = @_;
+	return '' unless $p && $p =~ /^\d+$/;
+	my $n = $p > 3 ? 3 : $p;
+	return '!' x $n;
+}
+
+sub is_urgent {
+	my ($t) = @_;
+	my $today = strftime('%Y-%m-%d', localtime);
+	for my $field (qw(due scheduled)) {
+		my $d = fmt_date($t->{$field});
+		return 1 if $d && $d =~ /^\d{4}-\d{2}-\d{2}$/ && $d le $today;
+	}
+	return 0;
+}
+
 sub table_layout {
 	my ($terminal_cols) = @_;
 	my $fixed	= $W_ID + $W_STATUS + $W_PROJECT + $W_SCHED + $W_DUE + $W_PRI + $W_TAGS + 8;
@@ -393,6 +415,8 @@ sub print_table {
 	print "\x{2500}" x $cols, "\n";
 	for my $t (@tasks) {
 		my $desc_star = $t->{description} ? '*' : ' ';
+		my $urgent = is_urgent($t);
+		print BOLD if $urgent;
 		printf $row_fmt,
 			$t->{id} // '',
 			substr(display_status($t, \%by_id), 0, $W_STATUS),
@@ -400,9 +424,10 @@ sub print_table {
 			$title_w, substr($t->{title} // '', 0, $title_w),
 			fmt_date($t->{scheduled}),
 			fmt_date($t->{due}),
-			substr($t->{priority} // '', 0, $W_PRI),
+			substr(fmt_priority($t->{priority}), 0, $W_PRI),
 			substr($t->{tags} // '', 0, $W_TAGS),
 			$desc_star;
+		print RESET if $urgent;
 	}
 }
 
@@ -745,6 +770,8 @@ sub cmd_list {
 		print "\x{2500}" x $cols, "\n";
 		for my $t (@tasks) {
 			my $desc_star = $t->{description} ? '*' : ' ';
+			my $urgent = is_urgent($t);
+			print BOLD if $urgent;
 			printf $row_fmt,
 				$t->{id} // '',
 				substr(display_status($t, \%by_id), 0, $W_STATUS),
@@ -752,9 +779,10 @@ sub cmd_list {
 				$title_w, substr($t->{title} // '', 0, $title_w),
 				fmt_date($t->{scheduled}),
 				fmt_date($t->{due}),
-				substr($t->{priority} // '', 0, $W_PRI),
+				substr(fmt_priority($t->{priority}), 0, $W_PRI),
 				substr($t->{tags} // '', 0, $W_TAGS),
 				$desc_star;
+			print RESET if $urgent;
 			for my $st (@{$subtasks{$t->{id} // 0} // []}) {
 				printf "    %-4s %s\n", $st->{id} // '', $st->{title} // '';
 			}
