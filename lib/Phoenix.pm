@@ -692,11 +692,34 @@ sub get_list_tasks {
 			$upper = $lower;
 		}
 		($lower, $upper) = ($upper, $lower) if defined($lower) && defined($upper) && $lower gt $upper;
+		my $_date_from_str = sub {
+			my ($date_str, $end_of_day) = @_;
+			my ($y, $m, $d) = split /-/, $date_str;
+			return $end_of_day
+				? mktime(59, 59, 23, $d, $m - 1, $y - 1900)
+				: mktime(0,  0,  0,  $d, $m - 1, $y - 1900);
+		};
 		@show = grep {
 			my $sched = $_->{scheduled} // '';
-			my $due	  = $_->{due}		// '';
-			($sched =~ /^\d{4}/ && (!defined $lower || $sched ge $lower) && $sched le $upper) ||
-			($due	=~ /^\d{4}/ && (!defined $lower || $due   ge $lower) && $due	  le $upper)
+			my $due   = $_->{due}       // '';
+			my $date_match =
+				($sched =~ /^\d{4}/ && (!defined $lower || $sched ge $lower) && $sched le $upper) ||
+				($due   =~ /^\d{4}/ && (!defined $lower || $due   ge $lower) && $due   le $upper);
+			my $cron_match = 0;
+			unless ($date_match) {
+				my $upper_epoch = $_date_from_str->($upper, 1);
+				my $from_epoch  = defined $lower
+					? $_date_from_str->($lower, 0) - 1
+					: $_date_from_str->($today, 0) - 1;
+				for my $expr (grep { is_cron_expr($_) } ($sched, $due)) {
+					my $next = next_cron_occurrence($expr, $from_epoch);
+					if (defined $next && $next <= $upper_epoch) {
+						$cron_match = 1;
+						last;
+					}
+				}
+			}
+			$date_match || $cron_match;
 		} @show;
 	}
 	# -R: omit repeating tasks (cron expression in scheduled or due)
