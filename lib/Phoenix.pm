@@ -710,7 +710,7 @@ sub get_list_tasks {
 				my $upper_epoch = $_date_from_str->($upper, 1);
 				my $from_epoch  = defined $lower
 					? $_date_from_str->($lower, 0) - 1
-					: do { my ($y,$m,$d) = split /-/, $today; mktime(0,0,0,$d,$m-1,$y-1900) - 1 };
+					: $_date_from_str->($today, 0) - 1;
 				for my $expr (grep { is_cron_expr($_) } ($sched, $due)) {
 					my $next = next_cron_occurrence($expr, $from_epoch);
 					if (defined $next && $next <= $upper_epoch) {
